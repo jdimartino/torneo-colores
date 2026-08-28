@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Admin - Torneo de Colores</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="css/styles.css?v=1">
+</head>
+<body class="admin-body">
+
+    <header class="app-header" id="login-section">
+        <div class="header-top">
+            <div class="header-brand">
+                <div>
+                    <h1>Torneo de Colores</h1>
+                    <div class="header-subtitle"><span class="dot"></span> Admin Panel</div>
+                </div>
+            </div>
+        </div>
+        <div class="header-line"></div>
+    </header>
+
+    <main>
+        <section id="login-container-wrapper">
+            <div class="login-container">
+                <h2><span class="material-symbols-outlined" style="font-size:1.5rem;vertical-align:middle;">lock</span> Acceso Admin</h2>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="email" placeholder="admin@ejemplo.com">
+                </div>
+                <div class="form-group">
+                    <label>Contraseña</label>
+                    <input type="password" id="password" placeholder="••••••••">
+                </div>
+                <div id="login-error" style="display:none;background:var(--error-container);color:white;border:1px solid rgba(255,84,73,0.3);border-radius:8px;padding:0.6rem 0.8rem;margin-bottom:0.75rem;font-size:0.82rem;text-align:center;"></div>
+                <button class="btn btn-primary btn-block" id="login-btn">
+                    <span class="material-symbols-outlined" style="font-size:1.1rem;">login</span> Ingresar
+                </button>
+                <a href="index.html" class="btn btn-outline btn-block" style="margin-top:0.5rem;text-decoration:none;text-align:center;">
+                    <span class="material-symbols-outlined" style="font-size:1rem;">arrow_back</span> Volver al Torneo
+                </a>
+            </div>
+        </section>
+
+        <div id="admin-panel" style="display:none;">
+            <header class="app-header">
+                <div class="admin-header">
+                    <div class="header-brand">
+                        <h1>Admin</h1>
+                    </div>
+                    <div id="tournament-selector-wrap" style="display:none;margin-left:0.75rem;">
+                        <select id="tournament-selector" class="tournament-select"></select>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;align-items:center;margin-left:auto;">
+                        <a href="index.html" class="logout-btn" style="text-decoration:none;">
+                            <span class="material-symbols-outlined" style="font-size:0.9rem;">arrow_back</span> Volver
+                        </a>
+                        <button class="logout-btn" id="logout-btn">
+                            <span class="material-symbols-outlined" style="font-size:0.9rem;">logout</span> Salir
+                        </button>
+                    </div>
+                </div>
+                <div class="header-line"></div>
+                <div class="tab-nav-wrap">
+                <nav class="tab-nav">
+                    <button class="admin-tab-btn active" data-panel="jugadores" onclick="showPanel('jugadores')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">groups</span> Jugadores
+                    </button>
+                    <button class="admin-tab-btn" data-panel="equipos" onclick="showPanel('equipos')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">palette</span> Equipos
+                    </button>
+                    <button class="admin-tab-btn" data-panel="draw" onclick="showPanel('draw')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">sports_tennis</span> DRAW
+                    </button>
+                    <button class="admin-tab-btn" data-panel="resultados" onclick="showPanel('resultados')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">sports_score</span> Resultados
+                    </button>
+                    <button class="admin-tab-btn" data-panel="posiciones" onclick="showPanel('posiciones')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">leaderboard</span> Posiciones
+                    </button>
+                    <button class="admin-tab-btn" data-panel="jornadas" onclick="showPanel('jornadas')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">event</span> Jornadas
+                    </button>
+                    <button class="admin-tab-btn" data-panel="semifinales" onclick="showPanel('semifinales')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">emoji_events</span> Semifinales
+                    </button>
+                    <button class="admin-tab-btn" data-panel="final" onclick="showPanel('final')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Final
+                    </button>
+                    <button class="admin-tab-btn" data-panel="torneos" onclick="showPanel('torneos')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">settings</span> Torneos
+                    </button>
+                </nav>
+                <button class="tab-scroll-btn" aria-label="Más pestañas">
+                    <span class="material-symbols-outlined">chevron_right</span>
+                </button>
+                </div>
+            </header>
+
+            <div id="panel-jugadores" class="admin-panel active"></div>
+            <div id="panel-equipos" class="admin-panel"></div>
+            <div id="panel-draw" class="admin-panel"></div>
+            <div id="panel-resultados" class="admin-panel"></div>
+            <div id="panel-posiciones" class="admin-panel"></div>
+            <div id="panel-jornadas" class="admin-panel"></div>
+            <div id="panel-semifinales" class="admin-panel"></div>
+            <div id="panel-final" class="admin-panel"></div>
+            <div id="panel-torneos" class="admin-panel"></div>
+        </div>
+    </main>
+
+    <footer class="app-footer">
+        <p>Desarrollado por JDM Services Systems</p>
+    </footer>
+
+    <script type="module" src="js/admin.js?v=1"></script>
+
+</body>
+</html>

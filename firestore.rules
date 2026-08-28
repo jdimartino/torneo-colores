@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/config/admin) &&
+        request.auth.uid in get(/databases/$(database)/documents/config/admin).data.adminUids;
+    }
+
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /torneos/{tournamentId} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      match /equipos/{equipoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /jugadores/{jugadorId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /jornadas/{jornadaId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /jornadas/{jornadaId}/enfrentamientos/{enfId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /jornadas/{jornadaId}/enfrentamientos/{enfId}/partidos/{partidoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /semifinales/{semiId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /semifinales/{semiId}/partidos/{partidoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /finales/{finalId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /finales/{finalId}/partidos/{partidoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+    }
+  }
+}

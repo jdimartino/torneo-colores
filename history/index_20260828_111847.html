@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Torneo de Colores</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="css/styles.css?v=1">
+</head>
+<body>
+
+<header class="app-header">
+    <div class="header-top">
+        <div class="header-brand">
+            <div>
+                <h1>Torneo de Colores</h1>
+                <div class="header-subtitle"><span class="dot"></span> Septiembre 2026</div>
+            </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+            <div class="header-tennis">&#127934;</div>
+            <a href="admin.html" class="admin-link" title="Admin">
+                <span class="material-symbols-outlined" style="font-size:1.1rem;">lock</span>
+            </a>
+        </div>
+    </div>
+    <div class="header-line"></div>
+    <div id="public-tournament-selector-wrap" class="tournament-bar" style="display:none;">
+        <span class="material-symbols-outlined tournament-bar-icon">swap_horiz</span>
+        <span class="tournament-bar-label">Cambiar Torneo</span>
+        <select id="public-tournament-selector" class="tournament-select-bar"></select>
+    </div>
+    <div class="tab-nav-wrap">
+        <nav class="tab-nav">
+            <button data-tab="posiciones" class="active" onclick="showTab('posiciones')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">leaderboard</span> Posiciones
+            </button>
+            <button data-tab="resultados" onclick="showTab('resultados')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">history</span> Resultados
+            </button>
+            <button data-tab="semifinales" onclick="showTab('semifinales')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">emoji_events</span> Semifinales
+            </button>
+            <button data-tab="final" onclick="showTab('final')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Final
+            </button>
+            <button data-tab="jornadas" onclick="showTab('jornadas')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">event</span> Jornadas
+            </button>
+        </nav>
+        <button class="tab-scroll-btn" aria-label="Más pestañas">
+            <span class="material-symbols-outlined">chevron_right</span>
+        </button>
+    </div>
+</header>
+
+<main id="app">
+    <section id="posiciones" class="tab-content active"></section>
+    <section id="resultados" class="tab-content"></section>
+    <section id="semifinales" class="tab-content"></section>
+    <section id="final" class="tab-content"></section>
+    <section id="jornadas" class="tab-content"></section>
+</main>
+
+<footer class="app-footer">
+    <p>Desarrollado por JDM Services Systems</p>
+</footer>
+
+<script type="module" src="js/app.js?v=1"></script>
+
+</body>
+</html>

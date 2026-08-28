@@ -1,0 +1,17 @@
+{
+  "name": "torneo-colores",
+  "version": "1.0.0",
+  "description": "App de gestión del Torneo de Colores.",
+  "main": "public/js/app.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdimartino/torneo-colores.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

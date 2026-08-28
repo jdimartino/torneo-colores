@@ -1,0 +1,5 @@
+# robots.txt for Torneo de Colores
+User-agent: *
+Allow: /
+
+Sitemap: https://torneo.tenistac.com/sitemap.xml
