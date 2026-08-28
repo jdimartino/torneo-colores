@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "tucanapp-pos"
-  }
+  },
+  "targets": {
+    "tucanapp-pos": {
+      "hosting": {
+        "tucanapp-pos": [
+          "tucanapp-pos"
+        ],
+        "jdm-pos-app": [
+          "jdm-pos-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
