@@ -1,5 +1,3 @@
-import { getActiveTournamentId } from './tournamentRefs.js';
-
 // ── Standings Calculation ──
 // Single source of truth: always derived from partidos finalizados
 

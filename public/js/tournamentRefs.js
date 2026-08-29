@@ -51,6 +51,7 @@ export async function loadTournamentConfig() {
         const snap = await getDoc(configDoc());
         if (snap.exists()) {
             const data = snap.data();
+            console.log('[config] config/activeTournament exists:', data);
             if (data.activeTournamentIds && data.activeTournamentIds.length > 0) {
                 _activeTournamentIds = data.activeTournamentIds;
                 _activeTournamentId = data.selectedTournamentId || _activeTournamentIds[0];
@@ -62,12 +63,18 @@ export async function loadTournamentConfig() {
                 const tSnap = await getDoc(torneoRef(_activeTournamentId));
                 if (tSnap.exists()) {
                     _activeTournamentData = { id: tSnap.id, ...tSnap.data() };
+                    console.log('[config] Tournament found:', _activeTournamentData.nombre || _activeTournamentId);
+                } else {
+                    console.warn('[config] Tournament', _activeTournamentId, 'NOT FOUND in torneos collection');
                 }
             }
+        } else {
+            console.warn('[config] config/activeTournament document DOES NOT EXIST');
         }
     } catch (e) {
-        console.error('Error loading tournament config:', e);
+        console.error('[config] Error loading tournament config:', e);
     }
+    console.log('[config] Final activeTournamentId:', _activeTournamentId);
     return _activeTournamentId;
 }
 

@@ -203,19 +203,10 @@ export function validateGenerationPreconditions(activeTeams, allJornadas, allEnf
         return { ok: false, message: 'Se necesitan al menos 2 equipos activos.' };
     }
 
-    if (!allJornadas || allJornadas.length === 0) {
-        return { ok: false, message: 'Primero debés crear las jornadas antes de generar el Round Robin.' };
-    }
-
     // Check if already has enfrentamientos (RR already generated)
     const totalEnfs = allEnfrentamientos ? allEnfrentamientos.length : 0;
     if (totalEnfs > 0) {
         return { ok: false, message: 'Ya existe un Round Robin para este torneo. No se puede generar otro.' };
-    }
-
-    // Check if any jornada has enfrentamientos with results
-    for (const j of allJornadas) {
-        // We check enfrentamientos separately via allEnfrentamientos
     }
 
     return { ok: true, message: '' };

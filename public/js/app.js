@@ -1,9 +1,8 @@
 import { getDocs, collection, query, where } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { db } from './firebase.js';
-import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament } from './tournamentRefs.js';
+import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
-import { esc, shortName, formatDate } from './utils.js';
-import { makeTeamHelpers } from './utils.js';
+import { esc, shortName, formatDate, makeTeamHelpers } from './utils.js';
 
 let allJugadores = [];
 let allEquipos = [];
@@ -12,6 +11,10 @@ let allJornadas = [];
 let allEnfrentamientos = [];
 let allSemifinales = [];
 let allFinales = [];
+
+const _teamHelpers = makeTeamHelpers(() => allEquipos);
+const getTeamName = _teamHelpers.getTeamName;
+const getTeamColor = _teamHelpers.getTeamColor;
 
 const loadingHTML = '<div class="panel-loading"><div class="tennis-ball-spinner"></div><div class="loading-text">Cargando datos del torneo...</div></div>';
 
