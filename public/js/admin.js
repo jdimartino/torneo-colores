@@ -1,7 +1,7 @@
 import { auth, db } from './firebase.js';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
-import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, writeBatch, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
-import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament } from './tournamentRefs.js';
+import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, where, writeBatch, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, finanzasCol } from './tournamentRefs.js';
 import { renderTournamentPanel, loadTournaments, getTournaments } from './tournament.js';
 import { calculateStandings } from './standings.js';
 import { CATEGORIAS_JUGADOR } from './categorias.js';
@@ -36,6 +36,23 @@ function formatDate(fecha) {
     } catch (e) { return ''; }
 }
 
+// 'Masculino Suma 9' → 'SUMA 9 MASCULINO'; 'Masculino 6ta Master' → '6TA MASTER MASCULINO'
+function formatCategoria(cat) {
+    if (!cat) return '';
+    const s = String(cat).trim();
+    const generar = (inicio, resto) => {
+        const r = resto.trim();
+        const mat = r.match(/^Suma\s+(\d+)\s*$/i);
+        if (mat) return 'SUMA ' + mat[1] + ' ' + inicio.toUpperCase();
+        if (r) return r.toUpperCase() + ' ' + inicio.toUpperCase();
+        return inicio.toUpperCase();
+    };
+    if (/^Masculino\s+/i.test(s)) return generar('Masculino', s.replace(/^Masculino/i, ''));
+    if (/^Femenino\s+/i.test(s)) return generar('Femenino', s.replace(/^Femenino/i, ''));
+    if (/^Mixto\s+/i.test(s)) return generar('Mixto', s.replace(/^Mixto/i, ''));
+    return s.toUpperCase();
+}
+
 function toast(msg, type) {
     const container = document.querySelector('.toast-container') || (() => {
         const el = document.createElement('div');
@@ -66,6 +83,44 @@ function showLoading(msg) {
 function hideLoading() {
     const overlay = document.getElementById('global-loading');
     if (overlay) overlay.style.display = 'none';
+}
+
+// ── Backward compatibility: normalize old local/visitante fields to a/b ──
+function normalizeFields(data) {
+    if (!data) return data;
+    const d = { ...data };
+    const map = {
+        equipo_local_id: 'equipo_a_id',
+        equipo_visitante_id: 'equipo_b_id',
+        equipo_local_nombre: 'equipo_a_nombre',
+        equipo_visitante_nombre: 'equipo_b_nombre',
+        jugador_local_1_id: 'jugador_a_1_id',
+        jugador_local_2_id: 'jugador_a_2_id',
+        jugador_visitante_1_id: 'jugador_b_1_id',
+        jugador_visitante_2_id: 'jugador_b_2_id',
+        jugador_local_1_nombre: 'jugador_a_1_nombre',
+        jugador_local_2_nombre: 'jugador_a_2_nombre',
+        jugador_visitante_1_nombre: 'jugador_b_1_nombre',
+        jugador_visitante_2_nombre: 'jugador_b_2_nombre',
+        set1_local: 'set1_a',
+        set1_visitante: 'set1_b',
+        set2_local: 'set2_a',
+        set2_visitante: 'set2_b',
+        tiebreak1_local: 'tiebreak1_a',
+        tiebreak1_visitante: 'tiebreak1_b',
+        tiebreak2_local: 'tiebreak2_a',
+        tiebreak2_visitante: 'tiebreak2_b',
+        supertiebreak_local: 'supertiebreak_a',
+        supertiebreak_visitante: 'supertiebreak_b',
+        games_local: 'games_a',
+        games_visitante: 'games_b'
+    };
+    for (const [oldKey, newKey] of Object.entries(map)) {
+        if (oldKey in d && !(newKey in d)) {
+            d[newKey] = d[oldKey];
+        }
+    }
+    return d;
 }
 
 function panelLoading(panel, msg) {
@@ -102,17 +157,672 @@ function getPlayersInTeam(equipoId) {
 function setupTabScroll() {
     document.querySelectorAll('.tab-nav-wrap').forEach(wrap => {
         const nav = wrap.querySelector('.tab-nav');
-        const btn = wrap.querySelector('.tab-scroll-btn');
-        if (!nav || !btn) return;
+        const btnRight = wrap.querySelector('.tab-scroll-btn');
+        const btnLeft = wrap.querySelector('.tab-scroll-left');
+        if (!nav) return;
+
+        nav.addEventListener('wheel', e => {
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                e.preventDefault();
+                nav.scrollLeft += e.deltaY;
+            }
+        }, { passive: false });
+
         const update = () => {
-            const overflow = nav.scrollWidth > nav.clientWidth + nav.scrollLeft + 4;
-            btn.classList.toggle('hidden', !overflow);
+            const atEnd = nav.scrollLeft >= nav.scrollWidth - nav.clientWidth - 4;
+            const atStart = nav.scrollLeft <= 4;
+            if (btnRight) btnRight.classList.toggle('hidden', atEnd);
+            if (btnLeft) btnLeft.classList.toggle('hidden', atStart);
         };
-        btn.addEventListener('click', () => nav.scrollBy({ left: 150, behavior: 'smooth' }));
+        if (btnRight) btnRight.addEventListener('click', () => nav.scrollBy({ left: 200, behavior: 'smooth' }));
+        if (btnLeft) btnLeft.addEventListener('click', () => nav.scrollBy({ left: -200, behavior: 'smooth' }));
         nav.addEventListener('scroll', update);
         window.addEventListener('resize', update);
         update();
     });
+}
+
+// ── Financial Module: Administración ──
+const MONEDAS_MANUAL = ['EUR', 'USD', 'Bs'];
+const MONTO_SOCIO = 20;
+const MONTO_INVITADO = 25;
+const BCV_API_URL = 'https://bcv.today/api/v1/rate.json';
+const TASAS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+let _financeFiltro = 'todos';
+let _financeModalMode = null;
+let _financeEditId = null;
+let _financeMovimientosCache = [];
+let _tasas = { eur_ves: 0, usd_ves: 0, fechaActualizacion: null, fuente: '', actualizadoEn: null };
+let _tasasLoading = false;
+let _tasasUpdating = false;
+
+async function getMovimientosFinancieros() {
+    const snap = await getDocs(query(finanzasCol(), orderBy('fecha', 'desc')));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function existeIngresoInscripcion(jugadorId) {
+    const q = query(
+        finanzasCol(),
+        where('tipo', '==', 'ingreso_inscripcion'),
+        where('jugadorId', '==', jugadorId)
+    );
+    const snap = await getDocs(q);
+    return snap.size > 0;
+}
+
+async function crearIngresoInscripcion(jugador) {
+    const isSocio = (jugador.status_socio || '').trim() === 'Socio';
+    const monto = isSocio ? MONTO_SOCIO : MONTO_INVITADO;
+    const nombre = (jugador.nombre || '') + ' ' + (jugador.apellidos || '');
+    const ahora = new Date();
+    const mov = {
+        tipo: 'ingreso_inscripcion',
+        fecha: ahora,
+        concepto: 'Inscripción - ' + nombre.trim(),
+        monto: monto,
+        moneda: 'EUR',
+        observacion: '',
+        jugadorId: jugador.id,
+        jugadorNombre: nombre.trim(),
+        origen: 'jugador',
+        creado: ahora
+    };
+    await addDoc(finanzasCol(), mov);
+}
+
+async function syncInscripcionIngreso(jugadorId) {
+    const jug = allJugadores.find(j => j.id === jugadorId);
+    if (!jug) return;
+    if (!jug.pago_recibido) return;
+    const yaExiste = await existeIngresoInscripcion(jugadorId);
+    if (yaExiste) return;
+    await crearIngresoInscripcion(jug);
+}
+
+async function sincronizarInscripciones() {
+    showLoading('Sincronizando ingresos de inscripciones...');
+    try {
+        const pagados = allJugadores.filter(j => j.pago_recibido);
+        let creados = 0;
+        for (const j of pagados) {
+            const yaExiste = await existeIngresoInscripcion(j.id);
+            if (!yaExiste) {
+                await crearIngresoInscripcion(j);
+                creados++;
+            }
+        }
+        toast(creados > 0 ? (creados + ' ingresos creados') : 'No hay ingresos nuevos', 'success');
+    } catch (e) {
+        toast('Error al sincronizar', 'error');
+        console.error(e);
+    } finally {
+        hideLoading();
+        renderAdministracion();
+    }
+}
+
+function formatMonto(monto, moneda) {
+    return (moneda === 'EUR' ? '€' : moneda === 'USD' ? '$' : 'Bs ') + monto.toFixed(2);
+}
+
+// ── BCV Rates ──
+function formatBs(monto) {
+    return 'Bs. ' + monto.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+// Date format conversion functions
+function formatDateToDDMM(dateStr) {
+    if (!dateStr) return '';
+    const [year, month, day] = dateStr.split('-');
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}`;
+}
+
+function formatDateToYYYYMMDD(dateStr) {
+    if (!dateStr) return '';
+    const [day, month, year] = dateStr.split('/');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function getEquivalenteBs(monto, moneda) {
+    if (moneda === 'Bs' || !monto || monto <= 0) return null;
+    const tasa = moneda === 'EUR' ? _tasas.eur_ves : _tasas.usd_ves;
+    if (!tasa || tasa <= 0) return null;
+    return formatBs(monto * tasa);
+}
+
+function getTasasDocRef() {
+    const tid = getActiveTournamentId();
+    if (!tid) return null;
+    return doc(db, 'torneos', tid, 'configuracion', 'tasas');
+}
+
+async function fetchTasasBCV() {
+    try {
+        const resp = await fetch(BCV_API_URL + '?t=' + Date.now());
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        if (!data.USD || !data.EUR) throw new Error('Incomplete data');
+        return {
+            eur_ves: data.EUR,
+            usd_ves: data.USD,
+            fechaActualizacion: new Date(data.updated_at || Date.now()),
+            fuente: 'BCV vía bcv.today'
+        };
+    } catch (e) {
+        console.error('[tasas] Error fetching BCV:', e);
+        return null;
+    }
+}
+
+async function guardarTasas(tasas) {
+    const ref = getTasasDocRef();
+    if (!ref) return;
+    try {
+        await setDoc(ref, {
+            eur_ves: tasas.eur_ves,
+            usd_ves: tasas.usd_ves,
+            fechaActualizacion: tasas.fechaActualizacion,
+            fuente: tasas.fuente,
+            actualizadoEn: new Date()
+        });
+    } catch (e) {
+        console.error('[tasas] Error guardando tasas:', e);
+    }
+}
+
+async function cargarTasas() {
+    if (_tasasLoading) return;
+    _tasasLoading = true;
+    try {
+        const ref = getTasasDocRef();
+        if (!ref) return;
+        const snap = await getDoc(ref);
+        const now = Date.now();
+        if (snap.exists()) {
+            const data = snap.data();
+            const fecha = data.fechaActualizacion?.toDate ? data.fechaActualizacion.toDate() : (data.fechaActualizacion ? new Date(data.fechaActualizacion) : null);
+            const actualizadoEn = data.actualizadoEn?.toDate ? data.actualizadoEn.toDate() : (data.actualizadoEn ? new Date(data.actualizadoEn) : null);
+            const age = fecha ? (now - fecha.getTime()) : Infinity;
+            _tasas = {
+                eur_ves: data.eur_ves || 0,
+                usd_ves: data.usd_ves || 0,
+                fechaActualizacion: fecha,
+                fuente: data.fuente || '',
+                actualizadoEn: actualizadoEn
+            };
+            if (age > TASAS_MAX_AGE_MS || !data.eur_ves) {
+                const fresh = await fetchTasasBCV();
+                if (fresh) {
+                    _tasas = fresh;
+                    await guardarTasas(fresh);
+                }
+            }
+        } else {
+            const fresh = await fetchTasasBCV();
+            if (fresh) {
+                _tasas = fresh;
+                await guardarTasas(fresh);
+            }
+        }
+    } catch (e) {
+        console.error('[tasas] Error cargando tasas:', e);
+    } finally {
+        _tasasLoading = false;
+    }
+}
+
+async function actualizarTasasManual() {
+    if (_tasasUpdating) return;
+    _tasasUpdating = true;
+    const btn = document.getElementById('btn-actualizar-tasas');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.7rem;animation:spin 1s linear infinite;">refresh</span> Actualizando…';
+    }
+    toast('Consultando tasas BCV (bcv.today)...', 'info');
+    try {
+        const prevEur = _tasas.eur_ves;
+        const prevUsd = _tasas.usd_ves;
+        const fresh = await fetchTasasBCV();
+        if (fresh) {
+            _tasas = fresh;
+            _tasas.actualizadoEn = new Date();
+            await guardarTasas(fresh);
+            const cambioEur = prevEur > 0 && Math.abs(fresh.eur_ves - prevEur) > 0.0001;
+            const cambioUsd = prevUsd > 0 && Math.abs(fresh.usd_ves - prevUsd) > 0.0001;
+            if (cambioEur || cambioUsd) {
+                toast('Tasas actualizadas: EUR ' + prevEur.toFixed(2) + ' → ' + fresh.eur_ves.toFixed(2) +
+                    ' · USD ' + prevUsd.toFixed(2) + ' → ' + fresh.usd_ves.toFixed(2) + '. Actualizada en la app ahora.', 'success');
+            } else {
+                toast('Tasas consultadas. Sin cambios: EUR ' + fresh.eur_ves.toFixed(2) + ' · USD ' + fresh.usd_ves.toFixed(2) + '. Ya estaban al día.', 'info');
+            }
+        } else {
+            toast('No se pudo conectar con bcv.today. Se conservan las tasas anteriores.', 'error');
+        }
+    } catch (e) {
+        console.error('[tasas] Error manual:', e);
+        toast('No se pudo conectar con bcv.today. Se conservan las tasas anteriores.', 'error');
+    } finally {
+        _tasasUpdating = false;
+        renderAdministracion();
+    }
+}
+
+function fmtFechaHora(fecha) {
+    if (!fecha) return '—';
+    return fecha.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+        ' ' + fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtHaceMs(ms) {
+    if (!ms || ms < 0) return '';
+    const min = Math.floor(ms / 60000);
+    if (min < 1) return 'hace menos de 1 min';
+    if (min < 60) return 'hace ' + min + ' min';
+    const h = Math.floor(min / 60);
+    if (h < 24) return 'hace ' + h + ' h';
+    const d = Math.floor(h / 24);
+    return 'hace ' + d + ' d';
+}
+
+function renderTasasReferencia() {
+    const hasTasas = _tasas.eur_ves > 0 || _tasas.usd_ves > 0;
+    const fecha = _tasas.fechaActualizacion;
+    const fechaStr = fmtFechaHora(fecha);
+    const updatedEn = _tasas.actualizadoEn;
+    const updatedEnStr = fmtFechaHora(updatedEn);
+    const isStale = fecha ? (Date.now() - fecha.getTime()) > TASAS_MAX_AGE_MS : true;
+    const bcvAgeStr = fecha ? fmtHaceMs(Date.now() - fecha.getTime()) : '';
+    const appAgeStr = updatedEn ? fmtHaceMs(Date.now() - updatedEn.getTime()) : '';
+
+    let html = '<div class="finance-rates-card">';
+    html += '<div class="frc-header">';
+    html += '<span class="material-symbols-outlined" style="font-size:1rem;color:var(--secondary);">paid</span>';
+    html += '<span class="frc-title">Tasas de referencia</span>';
+    html += '<button class="btn btn-sm btn-outline" id="btn-actualizar-tasas" onclick="actualizarTasasManual()" style="margin-left:auto;font-size:0.6rem;padding:0.15rem 0.3rem;"' + (_tasasUpdating ? ' disabled' : '') + '><span class="material-symbols-outlined" style="font-size:0.7rem;' + (_tasasUpdating ? 'animation:spin 1s linear infinite;' : '') + '">refresh</span> ' + (_tasasUpdating ? 'Actualizando…' : 'Actualizar') + '</button>';
+    html += '</div>';
+
+    if (hasTasas) {
+        html += '<div class="frc-rates">';
+        html += '<div class="frc-rate-row">';
+        html += '<span class="frc-cur">EUR</span>';
+        html += '<span class="frc-val">1 EUR = ' + formatBs(_tasas.eur_ves) + '</span>';
+        html += '</div>';
+        html += '<div class="frc-rate-row">';
+        html += '<span class="frc-cur">USD</span>';
+        html += '<span class="frc-val">1 USD = ' + formatBs(_tasas.usd_ves) + '</span>';
+        html += '</div>';
+        html += '</div>';
+        html += '<div class="frc-updated">Publicada por BCV: ' + fechaStr + (bcvAgeStr ? ' (' + bcvAgeStr + ')' : '') + ' · ' + esc(_tasas.fuente) + '</div>';
+        if (updatedEn) {
+            html += '<div class="frc-updated">Actualizada en la app: ' + updatedEnStr + (appAgeStr ? ' (' + appAgeStr + ')' : '') + '</div>';
+        }
+        if (isStale) {
+            html += '<div class="frc-warning"><span class="material-symbols-outlined" style="font-size:0.75rem;">warning</span> Tasa BCV publicada hace más de 24h. Presioná Actualizar para consultar.</div>';
+        }
+    } else {
+        html += '<div class="frc-warning"><span class="material-symbols-outlined" style="font-size:0.75rem;">error</span> No se pudieron cargar las tasas. Presioná Actualizar para consultar bcv.today.</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function updateEquivalenteModal() {
+    const el = document.getElementById('fm-equivalente');
+    if (!el) return;
+    const monto = parseFloat(document.getElementById('fm-monto').value);
+    const moneda = document.getElementById('fm-moneda').value;
+    if ((moneda === 'EUR' || moneda === 'USD') && monto > 0) {
+        const eq = getEquivalenteBs(monto, moneda);
+        if (eq) {
+            el.textContent = '≈ ' + eq;
+            el.style.display = 'block';
+            return;
+        }
+    }
+    el.style.display = 'none';
+}
+
+function openFinanceModal(mode, editId) {
+    _financeModalMode = mode;
+    _financeEditId = editId || null;
+    const overlay = document.getElementById('finance-modal-overlay');
+    if (!overlay) return;
+    const title = overlay.querySelector('.modal h3');
+    const fechaEl = document.getElementById('fm-fecha');
+    const conceptoEl = document.getElementById('fm-concepto');
+    const montoEl = document.getElementById('fm-monto');
+    const monedaEl = document.getElementById('fm-moneda');
+    const obsEl = document.getElementById('fm-observacion');
+    const btnEl = document.getElementById('fm-btn-save');
+    const eqEl = document.getElementById('fm-equivalente');
+
+    if (mode === 'editar' && editId) {
+        title.textContent = 'Editar Movimiento';
+        btnEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">save</span> Actualizar';
+        getMovimientosFinancieros().then(movs => {
+            const m = movs.find(x => x.id === editId);
+            if (!m) return;
+            fechaEl.value = m.fecha ? new Date(m.fecha.toDate ? m.fecha.toDate() : m.fecha).toISOString().slice(0, 10) : '';
+            conceptoEl.value = m.concepto || '';
+            montoEl.value = m.monto || '';
+            monedaEl.value = m.moneda || 'USD';
+            obsEl.value = m.observacion || '';
+            updateEquivalenteModal();
+        });
+    } else {
+        title.textContent = mode === 'ingreso' ? 'Nuevo Otro Ingreso' : 'Registrar Egreso';
+        btnEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">add</span> Guardar';
+        fechaEl.value = new Date().toISOString().slice(0, 10);
+        conceptoEl.value = '';
+        montoEl.value = '';
+        monedaEl.value = 'EUR';
+        obsEl.value = '';
+        if (eqEl) eqEl.style.display = 'none';
+    }
+
+    montoEl.oninput = updateEquivalenteModal;
+    monedaEl.onchange = updateEquivalenteModal;
+
+    overlay.classList.add('active');
+    overlay.style.display = 'flex';
+}
+
+function closeFinanceModal() {
+    const overlay = document.getElementById('finance-modal-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        overlay.style.display = 'none';
+    }
+    _financeModalMode = null;
+    _financeEditId = null;
+}
+
+async function saveFinanceModal() {
+    const fecha = document.getElementById('fm-fecha').value;
+    const concepto = document.getElementById('fm-concepto').value.trim();
+    const monto = parseFloat(document.getElementById('fm-monto').value);
+    const moneda = document.getElementById('fm-moneda').value;
+    const observacion = document.getElementById('fm-observacion').value.trim();
+
+    if (!fecha || !concepto || isNaN(monto) || monto <= 0) {
+        toast('Completá fecha, concepto y monto válido', 'error');
+        return;
+    }
+
+    if (_financeModalMode === 'editar' && _financeEditId) {
+        try {
+            await updateDoc(doc(finanzasCol(), _financeEditId), {
+                fecha: new Date(fecha),
+                concepto: concepto,
+                monto: monto,
+                moneda: moneda,
+                observacion: observacion
+            });
+            toast('Movimiento actualizado', 'success');
+        } catch (e) {
+            toast('Error al actualizar', 'error');
+            console.error(e);
+        }
+    } else {
+        const tipo = _financeModalMode === 'ingreso' ? 'otro_ingreso' : 'egreso';
+        const mov = {
+            tipo: tipo,
+            fecha: new Date(fecha),
+            concepto: concepto,
+            monto: monto,
+            moneda: moneda,
+            observacion: observacion,
+            origen: 'manual',
+            creado: new Date()
+        };
+        try {
+            await addDoc(finanzasCol(), mov);
+            toast(tipo === 'otro_ingreso' ? 'Otro ingreso agregado' : 'Egreso registrado', 'success');
+        } catch (e) {
+            toast('Error al guardar', 'error');
+            console.error(e);
+        }
+    }
+    closeFinanceModal();
+    renderAdministracion();
+}
+
+async function deleteMovimiento(id, tipo) {
+    if (tipo === 'ingreso_inscripcion') {
+        toast('Los ingresos de inscripción no se pueden eliminar', 'error');
+        return;
+    }
+    if (!confirm('¿Eliminar este movimiento financiero?')) return;
+    try {
+        await deleteDoc(doc(finanzasCol(), id));
+        toast('Movimiento eliminado', 'success');
+        renderAdministracion();
+    } catch (e) {
+        toast('Error al eliminar', 'error');
+        console.error(e);
+    }
+}
+
+function setFinanceFiltro(filtro) {
+    _financeFiltro = filtro;
+    const panel = document.getElementById('panel-administracion');
+    if (!panel) return;
+    const filtersEl = panel.querySelector('.finance-filters');
+    if (filtersEl) filtersEl.outerHTML = renderFinanceFiltros();
+    const movementsEl = panel.querySelector('.finance-movements');
+    if (movementsEl) movementsEl.outerHTML = renderFinanceMovimientos(_financeMovimientosCache);
+}
+
+function fmtMontoMov(m) {
+    if (m.moneda === 'EUR') return '€ ' + (+m.monto).toFixed(2);
+    if (m.moneda === 'USD') return '$ ' + (+m.monto).toFixed(2);
+    return formatBs(+m.monto);
+}
+
+function toUSD(m) {
+    const mon = m.moneda || 'USD';
+    if (mon === 'USD') return +m.monto || 0;
+    if (mon === 'EUR') return (_tasas.eur_ves && _tasas.usd_ves) ? (+m.monto * _tasas.eur_ves) / _tasas.usd_ves : 0;
+    if (mon === 'Bs') return (_tasas.usd_ves) ? (+m.monto / _tasas.usd_ves) : 0;
+    return 0;
+}
+
+function renderFinanceResumen(movimientos) {
+    const hasData = movimientos.length > 0;
+
+    if (!hasData) {
+        return '<div class="finance-summary-new"><div class="finance-section"><div class="fsc-empty">Sin movimientos</div></div></div>';
+    }
+
+    // Calculate inscription income (always in EUR)
+    const inscEur = movimientos
+        .filter(m => m.tipo === 'ingreso_inscripcion' && m.moneda === 'EUR')
+        .reduce((sum, m) => sum + m.monto, 0);
+
+    const inscBse = inscEur * (_tasas.eur_ves || 0);
+
+    // Calculate other income items
+    const otrosMov = movimientos.filter(m => m.tipo === 'otro_ingreso');
+    const otrosItems = otrosMov.map(m => ({
+        label: m.concepto || m.metodo || 'Otro',
+        valor: fmtMontoMov(m),
+        usd: toUSD(m)
+    }));
+
+    const totalOtrosUsd = otrosItems.reduce((s, x) => s + (x.usd || 0), 0);
+
+    // Calculate expenses by currency
+    const gastoEur = movimientos
+        .filter(m => m.tipo === 'egreso' && m.moneda === 'EUR')
+        .reduce((sum, m) => sum + m.monto, 0);
+
+    const gastoUsd = movimientos
+        .filter(m => m.tipo === 'egreso' && m.moneda === 'USD')
+        .reduce((sum, m) => sum + m.monto, 0);
+
+    const gastoBs = movimientos
+        .filter(m => m.tipo === 'egreso' && m.moneda === 'Bs')
+        .reduce((sum, m) => sum + m.monto, 0);
+
+    // Build HTML
+    let html = '<div class="finance-summary-new">';
+
+    // Inscription section
+    html += '<div class="finance-section">';
+    html += '<div class="fs-header"><span class="fs-icon material-symbols-outlined">how_to_reg</span><span class="fs-title">Ingresos por Inscripción</span></div>';
+    html += `<div class="fs-row"><span class="fs-label">Total (EUR)</span><span class="fs-value ingreso">${formatMonto(inscEur, 'EUR')}</span></div>`;
+    html += `<div class="fs-row"><span class="fs-label">Equivalente Bs</span><span class="fs-value equiv">${formatBs(inscBse)}</span></div>`;
+    html += '</div>';
+
+    // Other income section
+    html += '<div class="finance-section">';
+    html += '<div class="fs-header"><span class="fs-icon material-symbols-outlined">paid</span><span class="fs-title">Otros Ingresos</span></div>';
+    if (otrosItems.length > 0) {
+        otrosItems.forEach(x => {
+            html += `<div class="fs-row"><span class="fs-label">${esc(x.label)}</span><span class="fs-value ingreso">${x.valor}</span></div>`;
+        });
+        html += '<div class="fs-divider"></div>';
+        html += `<div class="fs-row"><span class="fs-label">Total Otros</span><span class="fs-value total">≈ $${totalOtrosUsd.toFixed(2)} USD</span></div>`;
+    } else {
+        html += '<div class="fs-row"><span class="fs-label fs-muted">Sin otros ingresos</span><span class="fs-value fs-muted">—</span></div>';
+    }
+    html += '</div>';
+
+    // Expenses section
+    html += '<div class="finance-section">';
+    html += '<div class="fs-header"><span class="fs-icon material-symbols-outlined">receipt_long</span><span class="fs-title">Gastos</span></div>';
+    html += `<div class="fs-row"><span class="fs-label">EUR</span><span class="fs-value egreso">${formatMonto(gastoEur, 'EUR')}</span></div>`;
+    html += `<div class="fs-row"><span class="fs-label">USD</span><span class="fs-value egreso">${formatMonto(gastoUsd, 'USD')}</span></div>`;
+    html += `<div class="fs-row"><span class="fs-label">Bs</span><span class="fs-value egreso">${formatBs(gastoBs)}</span></div>`;
+    html += '</div>';
+
+    html += '</div>';
+
+    return html;
+}
+
+function renderBalanceSection(balances) {
+    const monedas = ['EUR', 'USD', 'Bs'];
+    let html = '<div class="finance-balance-section">';
+    monedas.forEach(mon => {
+        const b = balances[mon] || { total: 0, hasData: false };
+        const sym = mon === 'EUR' ? '€' : mon === 'USD' ? '$' : 'Bs';
+        const cls = b.total > 0 ? ' balance-positive' : b.total < 0 ? ' balance-negative' : ' balance-zero';
+        html += '<div class="balance-item">';
+        html += '<span class="balance-label">Balance ' + mon + '</span>';
+        html += '<span class="balance-value' + cls + '">' + formatMonto(b.total, mon) + '</span>';
+        html += '</div>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function renderFinanceFiltros() {
+    const filtros = [
+        { key: 'todos', label: 'Todos' },
+        { key: 'ingresos', label: 'Ingresos' },
+        { key: 'egresos', label: 'Egresos' },
+        { key: 'ingreso_inscripcion', label: 'Inscripciones' },
+        { key: 'otro_ingreso', label: 'Otros Ingresos' }
+    ];
+    let html = '<div class="finance-filters">';
+    filtros.forEach(f => {
+        html += '<button class="finance-filter-pill' + (_financeFiltro === f.key ? ' active' : '') + '" onclick="setFinanceFiltro(\'' + f.key + '\')">' + f.label + '</button>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function renderFinanceMovimientos(movimientos) {
+    let filtered = movimientos;
+    if (_financeFiltro === 'ingresos') {
+        filtered = movimientos.filter(m => m.tipo === 'ingreso_inscripcion' || m.tipo === 'otro_ingreso');
+    } else if (_financeFiltro === 'egresos') {
+        filtered = movimientos.filter(m => m.tipo === 'egreso');
+    } else if (_financeFiltro !== 'todos') {
+        filtered = movimientos.filter(m => m.tipo === _financeFiltro);
+    }
+
+    let html = '<div class="finance-movements">';
+    if (filtered.length === 0) {
+        html += '<div class="finance-empty"><span class="material-symbols-outlined">receipt_long</span><p>No hay movimientos para mostrar</p></div>';
+    } else {
+    filtered.forEach(m => {
+        const fecha = m.fecha ? (m.fecha.toDate ? m.fecha.toDate() : new Date(m.fecha)) : null;
+        const fechaStr = fecha ? fecha.toLocaleDateString('es-AR') : '—';
+        const tipoLabel = m.tipo === 'ingreso_inscripcion' ? 'Inscripción' : m.tipo === 'otro_ingreso' ? 'Otro Ingreso' : 'Egreso';
+        const tipoClass = m.tipo === 'egreso' ? 'egreso' : 'ingreso';
+        const isManual = m.tipo !== 'ingreso_inscripcion';
+
+        html += '<div class="finance-movement-row">';
+        html += '<div class="fmr-left">';
+        html += '<div class="fmr-concepto">' + esc(m.concepto) + '</div>';
+        html += '<div class="fmr-meta">';
+        html += '<span class="fmr-fecha">' + fechaStr + '</span>';
+        html += '<span class="fmr-badge ' + tipoClass + '">' + tipoLabel + '</span>';
+        html += '<span class="fmr-moneda">' + m.moneda + '</span>';
+        if (m.observacion) html += '<span class="fmr-obs">' + esc(m.observacion) + '</span>';
+        if (m.jugadorNombre) html += '<span class="fmr-jugador">' + esc(m.jugadorNombre) + '</span>';
+        html += '</div>';
+        html += '</div>';
+        html += '<div class="fmr-right">';
+        html += '<span class="fmr-monto ' + tipoClass + '">' + formatMonto(m.monto, m.moneda) + '</span>';
+        if (m.moneda !== 'Bs') {
+            const eq = getEquivalenteBs(m.monto, m.moneda);
+            if (eq) html += '<div class="fmr-equivalente">≈ ' + eq + '</div>';
+        }
+        if (isManual) {
+            html += '<div class="fmr-actions">';
+            html += '<button class="btn-icon" onclick="openFinanceModal(\'editar\',\'' + m.id + '\')" title="Editar"><span class="material-symbols-outlined" style="font-size:1rem;">edit</span></button>';
+            html += '<button class="btn-icon" onclick="deleteMovimiento(\'' + m.id + '\',\'' + m.tipo + '\')" title="Eliminar"><span class="material-symbols-outlined" style="font-size:1rem;">delete</span></button>';
+            html += '</div>';
+        }
+        html += '</div>';
+        html += '</div>';
+    });
+    }
+    html += '</div>';
+    return html;
+}
+
+async function renderAdministracion() {
+    const panel = document.getElementById('panel-administracion');
+    if (!panel) return;
+    if (!getActiveTournamentId()) {
+        panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+            '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--primary);">info</span>' +
+            '<p style="margin-top:0.5rem;">No hay torneo activo. Creá uno desde la pestaña <strong>Torneos</strong>.</p></div>';
+        return;
+    }
+
+    await cargarTasas();
+
+    let movimientos = [];
+    try {
+        movimientos = await getMovimientosFinancieros();
+    } catch (e) {
+        console.error(e);
+    }
+    _financeMovimientosCache = movimientos;
+
+    let html = '';
+
+    html += renderTasasReferencia();
+    html += renderFinanceResumen(movimientos);
+
+    html += '<div class="finance-actions">';
+    html += '<button class="btn btn-primary" onclick="openFinanceModal(\'ingreso\')"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Otro Ingreso</button>';
+    html += '<button class="btn btn-danger" onclick="openFinanceModal(\'egreso\')"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Registrar Egreso</button>';
+    html += '<button class="btn btn-outline" onclick="sincronizarInscripciones()"><span class="material-symbols-outlined" style="font-size:1rem;">sync</span> Sincronizar Inscripciones</button>';
+    html += '</div>';
+
+    html += renderFinanceFiltros();
+    html += renderFinanceMovimientos(movimientos);
+
+    panel.innerHTML = html;
 }
 
 // ── Auth ──
@@ -240,10 +950,22 @@ window.toast = toast;
 window.showLoading = showLoading;
 window.hideLoading = hideLoading;
 window.refreshData = refreshData;
+window.renderAdministracion = renderAdministracion;
+window.sincronizarInscripciones = sincronizarInscripciones;
+window.openFinanceModal = openFinanceModal;
+window.closeFinanceModal = closeFinanceModal;
+window.saveFinanceModal = saveFinanceModal;
+window.deleteMovimiento = deleteMovimiento;
+window.setFinanceFiltro = setFinanceFiltro;
+window.actualizarTasasManual = actualizarTasasManual;
 
 window.addEventListener('popstate', () => {
     const panel = (history.state && history.state.panel) || location.hash.replace('#', '') || 'jugadores';
     _switchPanel(panel);
+});
+
+document.getElementById('finance-modal-overlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'finance-modal-overlay') closeFinanceModal();
 });
 
 // ── Data ──
@@ -257,9 +979,9 @@ async function loadData() {
             getDocs(query(col('equipos'), orderBy('nombre'))),
             getDocs(query(col('jornadas'), orderBy('numero')))
         ]);
-        allJugadores = j.docs.map(d => ({ id: d.id, ...d.data() }));
-        allEquipos = e.docs.map(d => ({ id: d.id, ...d.data() }));
-        allJornadas = n.docs.map(d => ({ id: d.id, ...d.data() }));
+        allJugadores = j.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        allEquipos = e.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        allJornadas = n.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
         console.log('[admin] loadData:', allJugadores.length, 'jugadores,', allEquipos.length, 'equipos,', allJornadas.length, 'jornadas');
     } catch (e) { console.error('[admin] loadData error:', e); }
 }
@@ -339,6 +1061,7 @@ function renderPanel(panelId) {
         case 'semifinales': renderSemifinales(); break;
         case 'final': renderFinal(); break;
         case 'torneos': renderTournamentPanel(); break;
+        case 'administracion': renderAdministracion(); break;
     }
 }
 
@@ -379,13 +1102,33 @@ function renderJugadores() {
         '<div class="form-group"><label>Status Socio *</label><select id="j-status-socio"><option value="">— Seleccionar —</option><option>Socio</option><option>Invitado Deportivo</option></select></div>' +
         '</div>' +
         '<div class="form-row">' +
-        '<div class="form-group"><label>Método de Pago *</label><select id="j-metodo-pago"><option value="">— Seleccionar —</option><option>Efectivo</option><option>Pago Móvil</option><option>Punto de Venta</option><option>Otro</option></select></div>' +
+        '<div class="form-group"><label>Método de Pago *</label><select id="j-metodo-pago"><option value="">— Seleccionar —</option><option>Efectivo Dólares</option><option>Pago Móvil</option><option>Otro</option></select></div>' +
+        '</div>' +
+        '<div id="j-pago-movil-fields" style="display:none;">' +
+        '<div class="form-row">' +
+        '<div class="form-group"><label>Monto (Bs)</label><input type="number" step="0.01" id="j-monto" placeholder="Ej: 350,00"></div>' +
+        '<div class="form-group"><label>Teléfono Pago Móvil</label><input type="tel" id="j-telefono-movil" placeholder="Tel desde donde pagó"></div>' +
         '</div>' +
         '<div class="form-row">' +
-        '<div class="form-group"><label>Fecha Operación</label><input type="text" id="j-fecha-pago" placeholder="Ej: 27/8"></div>' +
-        '<div class="form-group"><label>Nro Operación</label><input type="text" id="j-numero-operacion" placeholder="Nro de referencia"></div>' +
+        '<div class="form-group"><label>Comprobante (URL)</label><input type="text" id="j-comprobante" placeholder="https://..."></div>' +
+        '</div>' +
+        '</div>' +
+        '<div id="j-monto-usd-fields" style="display:none;">' +
+        '<div class="form-row">' +
+        '<div class="form-group"><label>Monto (USD)</label><input type="number" step="0.01" id="j-monto-usd" placeholder="Ej: 25,00"></div>' +
+        '</div>' +
+        '</div>' +
+        '<div id="j-descripcion-fields" style="display:none;">' +
+        '<div class="form-row">' +
+        '<div class="form-group"><label>Descripción Método</label><input type="text" id="j-descripcion-metodo" placeholder="Ej: Binance, Zelle..."></div>' +
+        '</div>' +
+        '</div>' +
+        '<div class="form-row">' +
+        '<div class="form-group"><label>Fecha Operación</label><input type="date" id="j-fecha-pago"></div>' +
+        '<div class="form-group" id="j-numero-operacion-field"><label>Nro Operación</label><input type="text" id="j-numero-operacion" placeholder="Nro de referencia"></div>' +
         '</div>' +
         '<div class="checkbox-group"><input type="checkbox" id="j-pago"><label for="j-pago"><span class="material-symbols-outlined" style="font-size:1rem;color:var(--primary);">payments</span> Pago Recibido</label></div>' +
+        '<div class="checkbox-group"><input type="checkbox" id="j-exonerado"><label for="j-exonerado"><span class="material-symbols-outlined" style="font-size:1rem;color:var(--secondary);">sell</span> Exonerado de pago</label></div>' +
         '<button class="btn btn-primary btn-block" id="btn-add-jugador"><span class="material-symbols-outlined" style="font-size:1rem;">person_add</span> Agregar Jugador</button>' +
         '</div>' +
         '</div>' +
@@ -412,7 +1155,47 @@ function renderJugadores() {
         document.getElementById('csv-file-input').click();
     });
     document.getElementById('csv-file-input').addEventListener('change', handleCSVFile);
+    const metodoSelect = document.getElementById('j-metodo-pago');
+    metodoSelect.addEventListener('change', () => toggleJugadorMetodoPago());
+    toggleJugadorMetodoPago();
+    const pagoCheckbox = document.getElementById('j-pago');
+    if (pagoCheckbox) {
+        pagoCheckbox.addEventListener('change', function(e) {
+            if (this.checked) { // trying to check
+                const metodo = document.getElementById('j-metodo-pago').value;
+                if (!metodo) {
+                    toast('Seleccioná el método de pago', 'error');
+                    this.checked = false;
+                }
+            } else { // trying to uncheck
+                const metodo = document.getElementById('j-metodo-pago').value;
+                const montoUsd = parseFloat(document.getElementById('j-monto-usd').value) || 0;
+                const montoBs = parseFloat(document.getElementById('j-monto').value) || 0;
+                const descripcion = document.getElementById('j-descripcion-metodo').value.trim();
+                const telefono = document.getElementById('j-telefono-movil').value.trim();
+                const comprobante = document.getElementById('j-comprobante').value.trim();
+                const hasPaymentData = metodo || montoUsd > 0 || montoBs > 0 || descripcion || telefono || comprobante;
+                if (hasPaymentData) {
+                    toast('Al desmarcar Pago Recibido, se perderán los datos de método de pago y monto.', 'warning');
+                }
+            }
+        });
+    }
     renderJugadoresList();
+}
+
+function toggleJugadorMetodoPago() {
+    const metodo = document.getElementById('j-metodo-pago');
+    const pm = document.getElementById('j-pago-movil-fields');
+    const usd = document.getElementById('j-monto-usd-fields');
+    const desc = document.getElementById('j-descripcion-fields');
+    const opField = document.getElementById('j-numero-operacion-field');
+    if (!metodo) return;
+    const v = metodo.value;
+    if (pm) pm.style.display = v === 'Pago Móvil' ? 'block' : 'none';
+    if (usd) usd.style.display = (v === 'Efectivo Dólares' || v === 'Otro') ? 'block' : 'none';
+    if (desc) desc.style.display = v === 'Otro' ? 'block' : 'none';
+    if (opField) opField.style.display = v === 'Pago Móvil' ? 'block' : 'none';
 }
 
 function toggleJugadorForm(open) {
@@ -459,10 +1242,24 @@ function renderJugadoresList() {
                 ? '<span class="badge" style="background:var(--primary-12);color:var(--primary);">' + esc(j.categoria) + '</span>'
                 : '';
             let pagoBadge;
-            if (j.pago_recibido) {
+            if (j.exonerado) {
+                pagoBadge = '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant);"><span class="material-symbols-outlined" style="font-size:0.6rem;">sell</span> Exonerado</span>';
+            } else if (j.pago_recibido) {
                 const metodo = j.metodo_pago || 'Pago';
                 let detail = '';
-                if (metodo === 'Otro' && (j.numero_operacion || j.fecha_pago)) {
+                if (metodo === 'Pago Móvil') {
+                    const montoStr = j.monto ? formatBs(j.monto) : '';
+                    if (montoStr) detail += ' · ' + montoStr;
+                    if (j.telefono_movil) detail += ' · Tel ' + esc(j.telefono_movil);
+                    if (j.numero_operacion) detail += ' · Op: ' + esc(j.numero_operacion);
+                    if (j.comprobante) detail += ' · <a href="' + esc(j.comprobante) + '" target="_blank" rel="noopener" style="color:var(--primary);">🧾</a>';
+                } else if (metodo === 'Efectivo Dólares') {
+                    if (j.monto_usd) detail += ' · $' + (+j.monto_usd).toFixed(2);
+                } else if (metodo === 'Otro') {
+                    if (j.descripcion_metodo) detail += ' · ' + esc(j.descripcion_metodo);
+                    if (j.monto_usd) detail += ' · $' + (+j.monto_usd).toFixed(2);
+                    if (j.numero_operacion) detail += ' · Op: ' + esc(j.numero_operacion);
+                } else if (j.numero_operacion || j.fecha_pago) {
                     detail = ' · Op: ' + esc(j.numero_operacion || '') + (j.fecha_pago ? ' ' + esc(j.fecha_pago) : '');
                 }
                 pagoBadge = '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">check</span> ' + esc(metodo) + detail + '</span>';
@@ -500,12 +1297,20 @@ async function addJugador() {
         telefono: document.getElementById('j-telefono').value.trim(),
         email: document.getElementById('j-email').value.trim(),
         pago_recibido: document.getElementById('j-pago').checked,
+        exonerado: document.getElementById('j-exonerado').checked,
         equipo_id: document.getElementById('j-equipo').value || null,
         numero_socio: document.getElementById('j-numero-socio').value.trim(),
         status_socio: document.getElementById('j-status-socio').value,
         metodo_pago: document.getElementById('j-metodo-pago').value,
         fecha_pago: document.getElementById('j-fecha-pago').value.trim(),
-        numero_operacion: document.getElementById('j-numero-operacion').value.trim()
+        numero_operacion: document.getElementById('j-numero-operacion').value.trim(),
+        monto: parseFloat(document.getElementById('j-monto').value) || 0,
+        telefono_movil: document.getElementById('j-telefono-movil').value.trim(),
+        comprobante: document.getElementById('j-comprobante').value.trim(),
+        monto_usd: parseFloat(document.getElementById('j-monto-usd').value) || 0,
+        descripcion_metodo: document.getElementById('j-descripcion-metodo').value.trim(),
+        payment_protected: true,
+        payment_protected: true
     };
     if (!data.nombre || !data.apellidos) { toast('Nombre y apellidos requeridos', 'error'); return; }
     if (!data.genero) { toast('Seleccioná el género', 'error'); return; }
@@ -516,8 +1321,11 @@ async function addJugador() {
     if (!data.metodo_pago) { toast('Seleccioná el método de pago', 'error'); return; }
     showLoading('Agregando jugador...');
     try {
-        await addDoc(col('jugadores'), data);
+        const ref = await addDoc(col('jugadores'), data);
         toast('Jugador agregado', 'success');
+        if (data.pago_recibido) {
+            await syncInscripcionIngreso(ref.id);
+        }
         await refreshData();
     } catch (e) {
         toast('Error al agregar jugador', 'error');
@@ -541,11 +1349,19 @@ function editJugador(id) {
     document.getElementById('j-telefono').value = j.telefono || '';
     document.getElementById('j-email').value = j.email || '';
     document.getElementById('j-pago').checked = j.pago_recibido || false;
+    const exoneradoEl = document.getElementById('j-exonerado');
+    if (exoneradoEl) exoneradoEl.checked = j.exonerado || false;
     document.getElementById('j-numero-socio').value = j.numero_socio || '';
     document.getElementById('j-status-socio').value = j.status_socio || '';
     document.getElementById('j-metodo-pago').value = j.metodo_pago || '';
-    document.getElementById('j-fecha-pago').value = j.fecha_pago || '';
+    document.getElementById('j-fecha-pago').value = j.fecha_pago ? formatDateToYYYYMMDD(j.fecha_pago) : '';
     document.getElementById('j-numero-operacion').value = j.numero_operacion || '';
+    document.getElementById('j-monto').value = j.monto || '';
+    document.getElementById('j-telefono-movil').value = j.telefono_movil || '';
+    document.getElementById('j-comprobante').value = j.comprobante || '';
+    document.getElementById('j-monto-usd').value = j.monto_usd || '';
+    document.getElementById('j-descripcion-metodo').value = j.descripcion_metodo || '';
+    toggleJugadorMetodoPago();
     const equipoSelect = document.getElementById('j-equipo');
     if (equipoSelect) {
         equipoSelect.innerHTML = '<option value="">— Sin equipo —</option>' + equipoOpts;
@@ -571,15 +1387,24 @@ function editJugador(id) {
                 telefono: document.getElementById('j-telefono').value.trim(),
                 email: document.getElementById('j-email').value.trim(),
                 pago_recibido: document.getElementById('j-pago').checked,
+                exonerado: document.getElementById('j-exonerado').checked,
                 equipo_id: document.getElementById('j-equipo').value || null,
                 numero_socio: document.getElementById('j-numero-socio').value.trim(),
                 status_socio: document.getElementById('j-status-socio').value,
                 metodo_pago: document.getElementById('j-metodo-pago').value,
-                fecha_pago: document.getElementById('j-fecha-pago').value.trim(),
-                numero_operacion: document.getElementById('j-numero-operacion').value.trim()
+fecha_pago: formatDateToDDMM(document.getElementById('j-fecha-pago').value),
+                numero_operacion: document.getElementById('j-numero-operacion').value.trim(),
+                monto: parseFloat(document.getElementById('j-monto').value) || 0,
+                telefono_movil: document.getElementById('j-telefono-movil').value.trim(),
+                comprobante: document.getElementById('j-comprobante').value.trim(),
+                monto_usd: parseFloat(document.getElementById('j-monto-usd').value) || 0,
+                descripcion_metodo: document.getElementById('j-descripcion-metodo').value.trim()
             };
             await updateDoc(docRef('jugadores', id), update);
             toast('Jugador actualizado', 'success');
+            if (update.pago_recibido) {
+                await syncInscripcionIngreso(id);
+            }
             await refreshData();
         } catch (e) {
             toast('Error al actualizar', 'error');
@@ -624,6 +1449,25 @@ function parseCSVLine(line) {
     return result;
 }
 
+function parseMontoCSV(raw) {
+    if (!raw) return 0;
+    let v = String(raw).trim();
+    v = v.replace(/[^\d.,\-]/g, '');
+    if (!v) return 0;
+    const neg = v.startsWith('-');
+    v = v.replace(/-/g, '');
+    const parts = v.split(',');
+    const lastPart = parts[parts.length - 1];
+    if (parts.length > 1 && lastPart.length <= 2) {
+        v = parts[0].replace(/\./g, '') + '.' + lastPart;
+    } else {
+        v = v.replace(/,/g, '');
+    }
+    const n = parseFloat(v);
+    if (isNaN(n)) return 0;
+    return neg ? -n : n;
+}
+
 function handleCSVFile(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -642,12 +1486,15 @@ function handleCSVFile(e) {
             categoria: headers.findIndex(h => h.includes('categ')),
             telefono: headers.findIndex(h => h.includes('telefono') || h.includes('teléfono')),
             email: headers.findIndex(h => h.includes('correo') || h.includes('email')),
-            pago: headers.findIndex(h => h.includes('pago') && !h.includes('metodo') && !h.includes('método') && !h.includes('📱') && !h.includes('comprobante')),
+            pago: headers.findIndex(h => h.includes('pago') && !h.includes('metodo') && !h.includes('método') && !h.includes('📱') && !h.includes('comprobante') && !h.includes('monto')),
             status_socio: headers.findIndex(h => h.includes('status')),
             numero_socio: headers.findIndex(h => h.includes('socio')),
             metodo_pago: headers.findIndex(h => h.includes('metodo') || h.includes('método')),
             numero_operacion: headers.findIndex(h => h.includes('operación') || h.includes('operacion') || h.includes('referencia')),
-            fecha_pago: headers.findIndex(h => h.includes('fecha'))
+            fecha_pago: headers.findIndex(h => h.includes('fecha')),
+            monto: headers.findIndex(h => h.includes('monto')),
+            telefono_movil: headers.findIndex(h => h.includes('pago móvil')),
+            comprobante: headers.findIndex(h => h.includes('comprobante'))
         };
         if (colMap.nombre === -1 || colMap.email === -1) {
             toast('El CSV no tiene las columnas esperadas (Nombre, Correo)', 'error'); return;
@@ -662,6 +1509,7 @@ function handleCSVFile(e) {
             const rawMetodo = colMap.metodo_pago !== -1 ? (cols[colMap.metodo_pago] || '').trim() : '';
             let metodoPago = rawMetodo;
             if (rawMetodo.includes('Pago Móvil') || rawMetodo.includes('pago móvil') || rawMetodo.includes('pago movil')) metodoPago = 'Pago Móvil';
+            const montoBs = parseMontoCSV(colMap.monto !== -1 ? (cols[colMap.monto] || '') : '');
             rows.push({
                 nombre: (cols[colMap.nombre] || '').trim(),
                 apellidos: (colMap.apellidos !== -1 ? (cols[colMap.apellidos] || '') : '').trim(),
@@ -670,11 +1518,15 @@ function handleCSVFile(e) {
                 telefono: (colMap.telefono !== -1 ? (cols[colMap.telefono] || '') : '').trim(),
                 email: email,
                 pago_recibido: rawPago === 'x',
+                exonerado: rawPago === '0',
                 status_socio: (colMap.status_socio !== -1 ? (cols[colMap.status_socio] || '') : '').trim(),
                 numero_socio: (colMap.numero_socio !== -1 ? (cols[colMap.numero_socio] || '') : '').trim(),
                 metodo_pago: metodoPago,
                 numero_operacion: (colMap.numero_operacion !== -1 ? (cols[colMap.numero_operacion] || '') : '').trim(),
                 fecha_pago: (colMap.fecha_pago !== -1 ? (cols[colMap.fecha_pago] || '') : '').trim(),
+                monto: montoBs,
+                telefono_movil: (colMap.telefono_movil !== -1 ? (cols[colMap.telefono_movil] || '') : '').trim(),
+                comprobante: (colMap.comprobante !== -1 ? (cols[colMap.comprobante] || '') : '').trim(),
                 _exists: existingEmails.has(email)
             });
         }
@@ -709,16 +1561,18 @@ function showCSVPreview(all, nuevos, existentes) {
         '</div>' +
         '</div>';
 
-    if (nuevos.length) {
-        document.getElementById('btn-confirm-import').addEventListener('click', () => safeAction(() => confirmCSVImport(nuevos)));
+    if (nuevos.length || existentes.length) {
+        document.getElementById('btn-confirm-import').addEventListener('click', () => safeAction(() => confirmCSVImport(nuevos, existentes)));
     }
     document.getElementById('btn-cancel-import').addEventListener('click', () => { el.style.display = 'none'; el.innerHTML = ''; });
 }
 
-async function confirmCSVImport(nuevos) {
-    showLoading('Importando ' + nuevos.length + ' jugadores...');
+async function confirmCSVImport(nuevos, existentes) {
+    showLoading('Importando ' + nuevos.length + ' nuevos y ' + existentes.length + ' existentes...');
     try {
         const batch = writeBatch(db);
+        
+        // Process new players
         nuevos.forEach(j => {
             const ref = docRefAuto('jugadores');
             batch.set(ref, {
@@ -729,25 +1583,69 @@ async function confirmCSVImport(nuevos) {
                 telefono: j.telefono,
                 email: j.email,
                 pago_recibido: j.pago_recibido || false,
+                exonerado: j.exonerado || false,
                 equipo_id: null,
                 numero_socio: j.numero_socio || '',
                 status_socio: j.status_socio || '',
                 metodo_pago: j.metodo_pago || '',
                 fecha_pago: j.fecha_pago || '',
-                numero_operacion: j.numero_operacion || ''
+                numero_operacion: j.numero_operacion || '',
+                monto: j.monto || 0,
+                telefono_movil: j.telefono_movil || '',
+                comprobante: j.comprobante || '',
+                monto_usd: j.monto_usd || 0,
+                descripcion_metodo: j.descripcion_metodo || '',
+                payment_protected: false  // CSV data comes from player form submissions
             });
         });
+        
+        // Process existing players - update non-payment fields always, payment fields only if not protected
+        existentes.forEach(existing => {
+            const ref = docRef('jugadores', existing.id);
+            const updateData = {
+                // Always update non-payment fields from CSV
+                nombre: existing.nombre,
+                apellidos: existing.apellidos,
+                genero: existing.genero || '',
+                categoria: existing.categoria || '',
+                telefono: existing.telefono,
+                email: existing.email,
+                equipo_id: null,
+                numero_socio: existing.numero_socio || '',
+                status_socio: existing.status_socio || ''
+            };
+            
+            // Only update payment fields if not protected
+            if (!existing.payment_protected) {
+                updateData.metodo_pago = existing.metodo_pago || '';
+                updateData.fecha_pago = existing.fecha_pago || '';
+                updateData.numero_operacion = existing.numero_operacion || '';
+                updateData.monto = existing.monto || 0;
+                updateData.telefono_movil = existing.telefono_movil || '';
+                updateData.comprobante = existing.comprobante || '';
+                updateData.monto_usd = existing.monto_usd || 0;
+                updateData.descripcion_metodo = existing.descripcion_metodo || '';
+                updateData.pago_recibido = existing.pago_recibido || false;
+                updateData.exonerado = existing.exonerado || false;
+                // When updating via CSV, mark as not protected (since it came from form)
+                updateData.payment_protected = false
+            }
+            
+            batch.update(ref, updateData);
+        });
+        
         await batch.commit();
-        toast(nuevos.length + ' jugadores importados', 'success');
-        document.getElementById('csv-preview').style.display = 'none';
-        document.getElementById('csv-preview').innerHTML = '';
-        document.getElementById('csv-file-name').textContent = '';
+        toast(`${nuevos.length} jugadores nuevos importados, ${existentes.length} existentes actualizados`, 'success');
         await refreshData();
+        await sincronizarInscripciones();
     } catch (e) {
         toast('Error al importar', 'error');
         console.error(e);
     } finally {
         hideLoading();
+        document.getElementById('csv-preview').style.display = 'none';
+        document.getElementById('csv-preview').innerHTML = '';
+        document.getElementById('csv-file-name').textContent = '';
     }
 }
 
@@ -1095,7 +1993,7 @@ async function loadDrawPartidos(jornadaId) {
     if (!jornadaId) return;
     try {
         const snap = await getDocs(partidoCol(jornadaId));
-        drawPartidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        drawPartidos = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
     } catch (e) {
         console.error('Error loading draw partidos:', e);
     }
@@ -1119,9 +2017,9 @@ function renderDraw() {
         '<select id="draw-jornada-select">' +
         '<option value="">— Seleccionar jornada —</option>' +
         allJornadas.map(j => {
-            const localName = getTeamName(j.equipo_local_id) || '?';
-            const visitName = getTeamName(j.equipo_visitante_id) || '?';
-            return '<option value="' + j.id + '">Jornada ' + j.numero + ' — ' + esc(localName) + ' VS ' + esc(visitName) + '</option>';
+            const teamAName = getTeamName(j.equipo_a_id) || '?';
+            const teamBName = getTeamName(j.equipo_b_id) || '?';
+            return '<option value="' + j.id + '">Jornada ' + j.numero + ' — ' + esc(teamAName) + ' VS ' + esc(teamBName) + '</option>';
         }).join('') +
         '</select></div>' +
         '</div>';
@@ -1143,10 +2041,10 @@ async function renderDrawDetail(panel) {
     const jornada = allJornadas.find(j => j.id === drawSelectedJornadaId);
     if (!jornada) { drawSelectedJornadaId = null; renderDraw(); return; }
 
-    const localName = getTeamName(jornada.equipo_local_id) || jornada.equipo_local_nombre || '?';
-    const visitName = getTeamName(jornada.equipo_visitante_id) || jornada.equipo_visitante_nombre || '?';
-    const localColor = getTeamColor(jornada.equipo_local_id) || '#888';
-    const visitColor = getTeamColor(jornada.equipo_visitante_id) || '#888';
+    const teamAName = getTeamName(jornada.equipo_a_id) || jornada.equipo_a_nombre || '?';
+    const teamBName = getTeamName(jornada.equipo_b_id) || jornada.equipo_b_nombre || '?';
+    const teamAColor = getTeamColor(jornada.equipo_a_id) || '#888';
+    const teamBColor = getTeamColor(jornada.equipo_b_id) || '#888';
 
     if (!drawPartidos.length || drawPartidos[0]?._drawJornadaId !== drawSelectedJornadaId) {
         await loadDrawPartidos(drawSelectedJornadaId);
@@ -1162,11 +2060,11 @@ async function renderDrawDetail(panel) {
         '<div style="font-size:0.82rem;color:var(--on-surface-variant-40);margin-top:0.15rem;">' + esc(getJornadaDateFormatted(jornada.fecha)) + '</div>' +
         '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.3rem;flex-wrap:wrap;">' +
         '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.9rem;">' +
-        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + localColor + ';"></span>' + esc(localName) +
+        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + teamAColor + ';"></span>' + esc(teamAName) +
         '</span>' +
         '<span style="font-family:Lexend;font-weight:800;font-size:0.85rem;color:var(--on-surface-variant-40);">VS</span>' +
         '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.9rem;">' +
-        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + visitColor + ';"></span>' + esc(visitName) +
+        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + teamBColor + ';"></span>' + esc(teamBName) +
         '</span>' +
         '</div>' +
         '</div>' +
@@ -1199,7 +2097,7 @@ async function renderDrawDetail(panel) {
             '</div>' +
             '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;">' +
             missing.map(cat =>
-                '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + esc(cat) + '</span>'
+                '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + esc(formatCategoria(cat)) + '</span>'
             ).join('') +
             '</div>' +
             '</div>';
@@ -1211,38 +2109,38 @@ async function renderDrawDetail(panel) {
 
     html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos</div>';
 
-    const localPlayers = getPlayersInTeam(jornada.equipo_local_id);
-    const visitPlayers = getPlayersInTeam(jornada.equipo_visitante_id);
+    const teamAPlayers = getPlayersInTeam(jornada.equipo_a_id);
+    const teamBPlayers = getPlayersInTeam(jornada.equipo_b_id);
 
     DRAW_CATEGORIAS.forEach((cat, idx) => {
         const partido = drawPartidos.find(p => p.categoria === cat);
         const num = String(idx + 1).padStart(2, '0');
 
         if (partido) {
-            const j1Name = getJugadorNombre(partido.jugador_local_1_id);
-            const j2Name = getJugadorNombre(partido.jugador_local_2_id);
-            const j3Name = getJugadorNombre(partido.jugador_visitante_1_id);
-            const j4Name = getJugadorNombre(partido.jugador_visitante_2_id);
-            const isEmpty = !partido.jugador_local_1_id && !partido.jugador_local_2_id && !partido.jugador_visitante_1_id && !partido.jugador_visitante_2_id;
+            const j1Name = getJugadorNombre(partido.jugador_a_1_id);
+            const j2Name = getJugadorNombre(partido.jugador_a_2_id);
+            const j3Name = getJugadorNombre(partido.jugador_b_1_id);
+            const j4Name = getJugadorNombre(partido.jugador_b_2_id);
+            const isEmpty = !partido.jugador_a_1_id && !partido.jugador_a_2_id && !partido.jugador_b_1_id && !partido.jugador_b_2_id;
 
             html += '<div class="card" style="margin-bottom:0.5rem;">' +
                 '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
                 '<div style="flex:1;min-width:0;">' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);margin-bottom:0.3rem;">' + num + ' ' + esc(cat) + '</div>';
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);margin-bottom:0.3rem;">' + num + ' ' + esc(formatCategoria(cat)) + '</div>';
 
             if (isEmpty) {
                 html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>';
             } else {
                 html += '<div style="display:flex;flex-direction:column;gap:0.25rem;">' +
                     '<div style="font-size:0.78rem;display:flex;align-items:center;gap:0.3rem;">' +
-                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + localColor + ';"></span>' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';"></span>' +
                     '<span style="font-weight:500;">' + esc(j1Name || '—') + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
                     '<span style="font-weight:500;">' + esc(j2Name || '—') + '</span>' +
                     '</div>' +
                     '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
                     '<div style="font-size:0.78rem;display:flex;align-items:center;gap:0.3rem;">' +
-                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + visitColor + ';"></span>' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';"></span>' +
                     '<span style="font-weight:500;">' + esc(j3Name || '—') + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
                     '<span style="font-weight:500;">' + esc(j4Name || '—') + '</span>' +
@@ -1261,7 +2159,7 @@ async function renderDrawDetail(panel) {
             html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
                 '<div style="display:flex;justify-content:space-between;align-items:center;">' +
                 '<div>' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(cat) + '</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
                 '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
                 '</div>' +
                 '<button class="btn btn-sm btn-primary" data-add-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
@@ -1304,7 +2202,7 @@ async function renderDrawDetail(panel) {
             const j1Val = j1Sel.value;
             const j2Val = j2Sel.value;
             j2Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                localPlayers.filter(p => p.id !== j1Val).map(p =>
+                teamAPlayers.filter(p => p.id !== j1Val).map(p =>
                     '<option value="' + p.id + '"' + (p.id === j2Val ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>'
                 ).join('');
         };
@@ -1317,7 +2215,7 @@ async function renderDrawDetail(panel) {
             const j3Val = j3Sel.value;
             const j4Val = j4Sel.value;
             j4Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                visitPlayers.filter(p => p.id !== j3Val).map(p =>
+                teamBPlayers.filter(p => p.id !== j3Val).map(p =>
                     '<option value="' + p.id + '"' + (p.id === j4Val ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>'
                 ).join('');
         };
@@ -1331,8 +2229,8 @@ function renderPartidoForm(jornada) {
     const existingPartido = !newCat ? drawPartidos.find(p => p.id === editingPartidoId) : null;
     const categoria = newCat || existingPartido?.categoria || '';
 
-    const localPlayers = getPlayersInTeam(jornada.equipo_local_id);
-    const visitPlayers = getPlayersInTeam(jornada.equipo_visitante_id);
+    const teamAPlayers = getPlayersInTeam(jornada.equipo_a_id);
+    const teamBPlayers = getPlayersInTeam(jornada.equipo_b_id);
 
     const makePlayerOpts = (players, selectedId, excludeId) => {
         return '<option value="">— Seleccionar —</option>' +
@@ -1341,48 +2239,48 @@ function renderPartidoForm(jornada) {
             ).join('');
     };
 
-    const j1 = existingPartido?.jugador_local_1_id || '';
-    const j2 = existingPartido?.jugador_local_2_id || '';
-    const j3 = existingPartido?.jugador_visitante_1_id || '';
-    const j4 = existingPartido?.jugador_visitante_2_id || '';
+    const j1 = existingPartido?.jugador_a_1_id || '';
+    const j2 = existingPartido?.jugador_a_2_id || '';
+    const j3 = existingPartido?.jugador_b_1_id || '';
+    const j4 = existingPartido?.jugador_b_2_id || '';
 
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
         '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> ' +
-        (newCat ? 'Crear' : 'Editar') + ' — ' + esc(categoria) +
+        (newCat ? 'Crear' : 'Editar') + ' — ' + esc(formatCategoria(categoria)) +
         '</div>';
 
-    if (localPlayers.length < 2) {
-        html += '<div class="empty-state" style="padding:1rem;"><p style="font-size:0.8rem;color:var(--error);">El equipo local no tiene suficientes jugadores (' + localPlayers.length + '/2 mínimos).</p></div>';
+    if (teamAPlayers.length < 2) {
+        html += '<div class="empty-state" style="padding:1rem;"><p style="font-size:0.8rem;color:var(--error);">El equipo A no tiene suficientes jugadores (' + teamAPlayers.length + '/2 mínimos).</p></div>';
     }
-    if (visitPlayers.length < 2) {
-        html += '<div class="empty-state" style="padding:1rem;"><p style="font-size:0.8rem;color:var(--error);">El equipo visitante no tiene suficientes jugadores (' + visitPlayers.length + '/2 mínimos).</p></div>';
+    if (teamBPlayers.length < 2) {
+        html += '<div class="empty-state" style="padding:1rem;"><p style="font-size:0.8rem;color:var(--error);">El equipo B no tiene suficientes jugadores (' + teamBPlayers.length + '/2 mínimos).</p></div>';
     }
 
     html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
-        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (getTeamColor(jornada.equipo_local_id) || '#888') + ';"></span> ' +
-        esc(getTeamName(jornada.equipo_local_id)) +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (getTeamColor(jornada.equipo_a_id) || '#888') + ';"></span> ' +
+        esc(getTeamName(jornada.equipo_a_id)) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1" data-team="local" data-slot="1">' +
-        makePlayerOpts(localPlayers, j1, j2) +
+        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1" data-team="a" data-slot="1">' +
+        makePlayerOpts(teamAPlayers, j1, j2) +
         '</select></div>' +
-        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2" data-team="local" data-slot="2">' +
-        makePlayerOpts(localPlayers, j2, j1) +
+        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2" data-team="a" data-slot="2">' +
+        makePlayerOpts(teamAPlayers, j2, j1) +
         '</select></div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;padding-bottom:1.5rem;font-family:Lexend;font-weight:800;font-size:0.8rem;color:var(--on-surface-variant-40);">VS</div>' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
-        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (getTeamColor(jornada.equipo_visitante_id) || '#888') + ';"></span> ' +
-        esc(getTeamName(jornada.equipo_visitante_id)) +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (getTeamColor(jornada.equipo_b_id) || '#888') + ';"></span> ' +
+        esc(getTeamName(jornada.equipo_b_id)) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3" data-team="visitante" data-slot="3">' +
-        makePlayerOpts(visitPlayers, j3, j4) +
+        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3" data-team="b" data-slot="3">' +
+        makePlayerOpts(teamBPlayers, j3, j4) +
         '</select></div>' +
-        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4" data-team="visitante" data-slot="4">' +
-        makePlayerOpts(visitPlayers, j4, j3) +
+        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4" data-team="b" data-slot="4">' +
+        makePlayerOpts(teamBPlayers, j4, j3) +
         '</select></div>' +
         '</div>' +
         '</div>';
@@ -1418,22 +2316,22 @@ async function savePartido() {
     const j4 = document.getElementById('dp-j4')?.value || null;
 
     if (!categoria) { toast('Categoría requerida', 'error'); return; }
-    if (!j1) { toast('Seleccioná Jugador 1 del equipo local', 'error'); return; }
-    if (!j2) { toast('Seleccioná Jugador 2 del equipo local', 'error'); return; }
-    if (!j3) { toast('Seleccioná Jugador 1 del equipo visitante', 'error'); return; }
-    if (!j4) { toast('Seleccioná Jugador 2 del equipo visitante', 'error'); return; }
-    if (j1 === j2) { toast('Los jugadores del equipo local no pueden ser iguales', 'error'); return; }
-    if (j3 === j4) { toast('Los jugadores del equipo visitante no pueden ser iguales', 'error'); return; }
+    if (!j1) { toast('Seleccioná Jugador 1 del equipo A', 'error'); return; }
+    if (!j2) { toast('Seleccioná Jugador 2 del equipo A', 'error'); return; }
+    if (!j3) { toast('Seleccioná Jugador 1 del equipo B', 'error'); return; }
+    if (!j4) { toast('Seleccioná Jugador 2 del equipo B', 'error'); return; }
+    if (j1 === j2) { toast('Los jugadores del equipo A no pueden ser iguales', 'error'); return; }
+    if (j3 === j4) { toast('Los jugadores del equipo B no pueden ser iguales', 'error'); return; }
 
     const j1Data = allJugadores.find(j => j.id === j1);
     const j2Data = allJugadores.find(j => j.id === j2);
     const j3Data = allJugadores.find(j => j.id === j3);
     const j4Data = allJugadores.find(j => j.id === j4);
 
-    if (j1Data && j1Data.equipo_id !== jornada.equipo_local_id) { toast('Jugador 1 local no pertenece al equipo local', 'error'); return; }
-    if (j2Data && j2Data.equipo_id !== jornada.equipo_local_id) { toast('Jugador 2 local no pertenece al equipo local', 'error'); return; }
-    if (j3Data && j3Data.equipo_id !== jornada.equipo_visitante_id) { toast('Jugador 1 visitante no pertenece al equipo visitante', 'error'); return; }
-    if (j4Data && j4Data.equipo_id !== jornada.equipo_visitante_id) { toast('Jugador 2 visitante no pertenece al equipo visitante', 'error'); return; }
+    if (j1Data && j1Data.equipo_id !== jornada.equipo_a_id) { toast('Jugador 1 del equipo A no pertenece al equipo A', 'error'); return; }
+    if (j2Data && j2Data.equipo_id !== jornada.equipo_a_id) { toast('Jugador 2 del equipo A no pertenece al equipo A', 'error'); return; }
+    if (j3Data && j3Data.equipo_id !== jornada.equipo_b_id) { toast('Jugador 1 del equipo B no pertenece al equipo B', 'error'); return; }
+    if (j4Data && j4Data.equipo_id !== jornada.equipo_b_id) { toast('Jugador 2 del equipo B no pertenece al equipo B', 'error'); return; }
 
     if (newCat) {
         const existing = drawPartidos.find(p => p.categoria === categoria);
@@ -1442,18 +2340,18 @@ async function savePartido() {
 
     const data = {
         categoria,
-        equipo_local_id: jornada.equipo_local_id,
-        equipo_visitante_id: jornada.equipo_visitante_id,
-        equipo_local_nombre: getTeamName(jornada.equipo_local_id),
-        equipo_visitante_nombre: getTeamName(jornada.equipo_visitante_id),
-        jugador_local_1_id: j1,
-        jugador_local_2_id: j2,
-        jugador_visitante_1_id: j3,
-        jugador_visitante_2_id: j4,
-        jugador_local_1_nombre: getJugadorNombre(j1),
-        jugador_local_2_nombre: getJugadorNombre(j2),
-        jugador_visitante_1_nombre: getJugadorNombre(j3),
-        jugador_visitante_2_nombre: getJugadorNombre(j4),
+        equipo_a_id: jornada.equipo_a_id,
+        equipo_b_id: jornada.equipo_b_id,
+        equipo_a_nombre: getTeamName(jornada.equipo_a_id),
+        equipo_b_nombre: getTeamName(jornada.equipo_b_id),
+        jugador_a_1_id: j1,
+        jugador_a_2_id: j2,
+        jugador_b_1_id: j3,
+        jugador_b_2_id: j4,
+        jugador_a_1_nombre: getJugadorNombre(j1),
+        jugador_a_2_nombre: getJugadorNombre(j2),
+        jugador_b_1_nombre: getJugadorNombre(j3),
+        jugador_b_2_nombre: getJugadorNombre(j4),
         estado: 'pendiente'
     };
 
@@ -1482,7 +2380,7 @@ async function savePartido() {
 async function deletePartido(partidoId) {
     const partido = drawPartidos.find(p => p.id === partidoId);
     if (!partido) return;
-    if (!confirm('¿Eliminar el partido "' + partido.categoria + '"?')) return;
+    if (!confirm('¿Eliminar el partido "' + formatCategoria(partido.categoria) + '"?')) return;
 
     showLoading('Eliminando partido...');
     try {
@@ -1505,7 +2403,18 @@ async function deletePartido(partidoId) {
 // ═══════════════════════════════════════════
 let resSelectedJornadaId = null;
 let resPartidos = [];
-let editingResultadoId = null;
+let resultScores = {};
+let resView = 'encurso';
+let resDataKey = null;
+let draftTimers = new Map();
+let resEditing = {};
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', () => flushDrafts());
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushDrafts();
+    });
+}
 
 
 // ── Score Validation ──
@@ -1522,10 +2431,10 @@ let editingResultadoId = null;
 //   Extended: 5-3, 3-5 (win by 2 after 3-3)
 //   Tie Break: 4-4 + TB
 
-function isValidSetScore(local, vis) {
-    if (local < 0 || vis < 0) return false;
-    const max = Math.max(local, vis);
-    const min = Math.min(local, vis);
+function isValidSetScore(a, b) {
+    if (a < 0 || b < 0) return false;
+    const max = Math.max(a, b);
+    const min = Math.min(a, b);
     // 4-0, 4-1, 4-2
     if (max === 4 && min <= 2) return true;
     // 5-3 or 3-5 (extended from 3-3, win by 2)
@@ -1535,27 +2444,99 @@ function isValidSetScore(local, vis) {
     return false;
 }
 
-function isTiebreakSet(local, vis) {
-    return local === 4 && vis === 4;
+function isTiebreakSet(a, b) {
+    return a === 4 && b === 4;
 }
 
-function isValidSupertiebreak(local, vis) {
-    if (local < 0 || vis < 0) return false;
-    const max = Math.max(local, vis);
-    const min = Math.min(local, vis);
+function isValidSupertiebreak(a, b) {
+    if (a < 0 || b < 0) return false;
+    const max = Math.max(a, b);
+    const min = Math.min(a, b);
     if (max < 10) return false;
     if (max - min < 2) return false;
     return true;
 }
 
-function validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis) {
+// ── Inline Score Helpers ──
+function isSetGamesDone(a, b) {
+    if (a === 4 && b <= 2) return true;
+    if (b === 4 && a <= 2) return true;
+    if (a === 5 && b === 3) return true;
+    if (b === 5 && a === 3) return true;
+    return false;
+}
+
+function isTBComplete(tba, tbb) {
+    if (tba == null || tbb == null) return false;
+    const m = Math.max(tba, tbb);
+    const d = Math.abs(tba - tbb);
+    return m >= 7 && d >= 2;
+}
+
+function canIncrementGames(na, nb) {
+    const mx = Math.max(na, nb);
+    const mn = Math.min(na, nb);
+    if (mx <= 3) return true;
+    if (mx === 4 && mn <= 2) return true;
+    if (mx === 4 && mn === 3) return true;
+    if (mx === 4 && mn === 4) return true;
+    if (mx === 5 && mn === 3) return true;
+    return false;
+}
+
+function canDecrementGames(a, b) {
+    return a > 0 && b > 0;
+}
+
+function adjustScore(a, b, team, delta) {
+    const na = team === 'a' ? a + delta : a;
+    const nb = team === 'b' ? b + delta : b;
+    if (na < 0 || nb < 0) return { a: a, b: b };
+    if (delta > 0 && !canIncrementGames(na, nb)) return { a: a, b: b };
+    return { a: na, b: nb };
+}
+
+function adjustTB(a, b, team, delta) {
+    const na = team === 'a' ? a + delta : a;
+    const nb = team === 'b' ? b + delta : b;
+    if (na < 0 || nb < 0) return { a: a, b: b };
+    return { a: na, b: nb };
+}
+
+function adjustSTB(a, b, team, delta) {
+    const na = team === 'a' ? a + delta : a;
+    const nb = team === 'b' ? b + delta : b;
+    if (na < 0 || nb < 0) return { a: a, b: b };
+    return { a: na, b: nb };
+}
+
+function applyMatchStateInline(id) {
+    const rs = resultScores[id];
+    if (!rs) return;
+    const setsA = (rs.set1_a > rs.set1_b ? 1 : 0) + (rs.set2_a > rs.set2_b ? 1 : 0);
+    const setsB = (rs.set1_b > rs.set1_a ? 1 : 0) + (rs.set2_b > rs.set2_a ? 1 : 0);
+    const els = ['res-n-a', 'res-s1-a', 'res-s2-a', 'res-n-b', 'res-s1-b', 'res-s2-b'].map(k => document.getElementById(k + '-' + id));
+    if (els.some(el => !el)) return;
+    els.forEach(el => el.classList.remove('state-win', 'state-lose', 'state-tie'));
+    if (setsA > setsB) {
+        ['res-n-a', 'res-s1-a', 'res-s2-a'].forEach(k => document.getElementById(k + '-' + id)?.classList.add('state-win'));
+        ['res-n-b', 'res-s1-b', 'res-s2-b'].forEach(k => document.getElementById(k + '-' + id)?.classList.add('state-lose'));
+    } else if (setsB > setsA) {
+        ['res-n-a', 'res-s1-a', 'res-s2-a'].forEach(k => document.getElementById(k + '-' + id)?.classList.add('state-lose'));
+        ['res-n-b', 'res-s1-b', 'res-s2-b'].forEach(k => document.getElementById(k + '-' + id)?.classList.add('state-win'));
+    } else {
+        els.forEach(el => el.classList.add('state-tie'));
+    }
+}
+
+function validateMatchScore(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB) {
     const e = (msg) => { toast(msg, 'error'); return false; };
 
-    if (s1Local === '' || s1Vis === '' || s2Local === '' || s2Vis === '') {
+    if (s1A === '' || s1B === '' || s2A === '' || s2B === '') {
         return e('Completá ambos sets');
     }
-    const s1l = parseInt(s1Local), s1v = parseInt(s1Vis);
-    const s2l = parseInt(s2Local), s2v = parseInt(s2Vis);
+    const s1l = parseInt(s1A), s1v = parseInt(s1B);
+    const s2l = parseInt(s2A), s2v = parseInt(s2B);
 
     if (isNaN(s1l) || isNaN(s1v) || isNaN(s2l) || isNaN(s2v)) {
         return e('Los valores deben ser números');
@@ -1575,10 +2556,10 @@ function validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb
     const set2TB = isTiebreakSet(s2l, s2v);
 
     if (set1TB) {
-        if (tb1Local === '' || tb1Vis === '' || tb1Local === undefined || tb1Vis === undefined) {
+        if (tb1A === '' || tb1B === '' || tb1A === undefined || tb1B === undefined) {
             return e('Set 1 es 4-4: se requiere Tie Break');
         }
-        const tb1l = parseInt(tb1Local), tb1v = parseInt(tb1Vis);
+        const tb1l = parseInt(tb1A), tb1v = parseInt(tb1B);
         if (isNaN(tb1l) || isNaN(tb1v)) return e('Tie Break 1: valores inválidos');
         if (tb1l < 0 || tb1v < 0) return e('Tie Break 1: valores negativos');
         if (tb1l < 7 && tb1v < 7) return e('Tie Break 1: mínimo 7 puntos');
@@ -1586,33 +2567,33 @@ function validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb
     }
 
     if (set2TB) {
-        if (tb2Local === '' || tb2Vis === '' || tb2Local === undefined || tb2Vis === undefined) {
+        if (tb2A === '' || tb2B === '' || tb2A === undefined || tb2B === undefined) {
             return e('Set 2 es 4-4: se requiere Tie Break');
         }
-        const tb2l = parseInt(tb2Local), tb2v = parseInt(tb2Vis);
+        const tb2l = parseInt(tb2A), tb2v = parseInt(tb2B);
         if (isNaN(tb2l) || isNaN(tb2v)) return e('Tie Break 2: valores inválidos');
         if (tb2l < 0 || tb2v < 0) return e('Tie Break 2: valores negativos');
         if (tb2l < 7 && tb2v < 7) return e('Tie Break 2: mínimo 7 puntos');
         if (Math.abs(tb2l - tb2v) < 2) return e('Tie Break 2: diferencia mínima de 2 puntos');
     }
 
-    const setsLocal = (determineSetWinner(s1l, s1v, parseInt(tb1Local), parseInt(tb1Vis)) === 'local' ? 1 : 0) +
-                      (determineSetWinner(s2l, s2v, parseInt(tb2Local), parseInt(tb2Vis)) === 'local' ? 1 : 0);
-    const setsVis = (determineSetWinner(s1l, s1v, parseInt(tb1Local), parseInt(tb1Vis)) === 'visitante' ? 1 : 0) +
-                    (determineSetWinner(s2l, s2v, parseInt(tb2Local), parseInt(tb2Vis)) === 'visitante' ? 1 : 0);
+    const setsA = (determineSetWinner(s1l, s1v, parseInt(tb1A), parseInt(tb1B)) === 'a' ? 1 : 0) +
+                      (determineSetWinner(s2l, s2v, parseInt(tb2A), parseInt(tb2B)) === 'a' ? 1 : 0);
+    const setsB = (determineSetWinner(s1l, s1v, parseInt(tb1A), parseInt(tb1B)) === 'b' ? 1 : 0) +
+                    (determineSetWinner(s2l, s2v, parseInt(tb2A), parseInt(tb2B)) === 'b' ? 1 : 0);
 
-    if (setsLocal === 2 || setsVis === 2) {
-        if (stbLocal !== '' && stbVis !== '' && stbLocal !== undefined && stbVis !== undefined) {
+    if (setsA === 2 || setsB === 2) {
+        if (stbA !== '' && stbB !== '' && stbA !== undefined && stbB !== undefined) {
             return e('No debe haber Super Tie Break si un equipo ganó 2-0');
         }
         return true;
     }
 
-    if (setsLocal === 1 && setsVis === 1) {
-        if (stbLocal === '' || stbVis === '' || stbLocal === undefined || stbVis === undefined) {
+    if (setsA === 1 && setsB === 1) {
+        if (stbA === '' || stbB === '' || stbA === undefined || stbB === undefined) {
             return e('Se requiere Super Tie Break (sets 1-1)');
         }
-        const stbl = parseInt(stbLocal), stbv = parseInt(stbVis);
+        const stbl = parseInt(stbA), stbv = parseInt(stbB);
         if (isNaN(stbl) || isNaN(stbv)) return e('Super Tie Break: valores inválidos');
         if (stbl < 0 || stbv < 0) return e('Super Tie Break: valores negativos');
         if (!isValidSupertiebreak(stbl, stbv)) {
@@ -1624,53 +2605,53 @@ function validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb
     return true;
 }
 
-function determineSetWinner(setLocal, setVis, tbLocal, tbVis) {
-    if (isTiebreakSet(setLocal, setVis)) {
-        if (!isNaN(tbLocal) && !isNaN(tbVis)) {
-            if (tbLocal > tbVis) return 'local';
-            if (tbVis > tbLocal) return 'visitante';
+function determineSetWinner(setA, setB, tbA, tbB) {
+    if (isTiebreakSet(setA, setB)) {
+        if (!isNaN(tbA) && !isNaN(tbB)) {
+            if (tbA > tbB) return 'a';
+            if (tbB > tbA) return 'b';
         }
         return null;
     }
-    if (setLocal > setVis) return 'local';
-    if (setVis > setLocal) return 'visitante';
+    if (setA > setB) return 'a';
+    if (setB > setA) return 'b';
     return null;
 }
 
-function determineMatchWinner(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis) {
-    const s1l = parseInt(s1Local), s1v = parseInt(s1Vis);
-    const s2l = parseInt(s2Local), s2v = parseInt(s2Vis);
+function determineMatchWinner(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB) {
+    const s1l = parseInt(s1A), s1v = parseInt(s1B);
+    const s2l = parseInt(s2A), s2v = parseInt(s2B);
 
-    const set1Winner = determineSetWinner(s1l, s1v, parseInt(tb1Local), parseInt(tb1Vis));
-    const set2Winner = determineSetWinner(s2l, s2v, parseInt(tb2Local), parseInt(tb2Vis));
+    const set1Winner = determineSetWinner(s1l, s1v, parseInt(tb1A), parseInt(tb1B));
+    const set2Winner = determineSetWinner(s2l, s2v, parseInt(tb2A), parseInt(tb2B));
 
-    let setsLocal = 0, setsVis = 0;
-    if (set1Winner === 'local') setsLocal++;
-    if (set1Winner === 'visitante') setsVis++;
-    if (set2Winner === 'local') setsLocal++;
-    if (set2Winner === 'visitante') setsVis++;
+    let setsA = 0, setsB = 0;
+    if (set1Winner === 'a') setsA++;
+    if (set1Winner === 'b') setsB++;
+    if (set2Winner === 'a') setsA++;
+    if (set2Winner === 'b') setsB++;
 
-    if (setsLocal === 2) return 'local';
-    if (setsVis === 2) return 'visitante';
+    if (setsA === 2) return 'a';
+    if (setsB === 2) return 'b';
 
-    if (!isNaN(stbLocal) && !isNaN(stbVis)) {
-        if (stbLocal > stbVis) return 'local';
-        if (stbVis > stbLocal) return 'visitante';
+    if (!isNaN(stbA) && !isNaN(stbB)) {
+        if (stbA > stbB) return 'a';
+        if (stbB > stbA) return 'b';
     }
     return null;
 }
 
-function calculateGames(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis) {
-    const s1l = parseInt(s1Local) || 0, s1v = parseInt(s1Vis) || 0;
-    const s2l = parseInt(s2Local) || 0, s2v = parseInt(s2Vis) || 0;
-    const tb1l = parseInt(tb1Local) || 0, tb1v = parseInt(tb1Vis) || 0;
-    const tb2l = parseInt(tb2Local) || 0, tb2v = parseInt(tb2Vis) || 0;
-    const stbl = parseInt(stbLocal) || 0, stbv = parseInt(stbVis) || 0;
+function calculateGames(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB) {
+    const s1l = parseInt(s1A) || 0, s1v = parseInt(s1B) || 0;
+    const s2l = parseInt(s2A) || 0, s2v = parseInt(s2B) || 0;
+    const tb1l = parseInt(tb1A) || 0, tb1v = parseInt(tb1B) || 0;
+    const tb2l = parseInt(tb2A) || 0, tb2v = parseInt(tb2B) || 0;
+    const stbl = parseInt(stbA) || 0, stbv = parseInt(stbB) || 0;
     return {
-        games_local: s1l + s2l + tb1l + tb2l,
-        games_visitante: s1v + s2v + tb1v + tb2v,
-        stb_local: stbl,
-        stb_visitante: stbv
+        games_a: s1l + s2l + tb1l + tb2l,
+        games_b: s1v + s2v + tb1v + tb2v,
+        stb_a: stbl,
+        stb_b: stbv
     };
 }
 
@@ -1687,15 +2668,116 @@ function equipoRef(equipoId) {
     return doc(db, 'torneos', getActiveTournamentId(), 'equipos', equipoId);
 }
 
-async function loadResPartidos(jornadaId) {
+async function ensureResData() {
+    if (!allJornadas.length) return;
+    const key = getActiveTournamentId() + '|' + allJornadas.map(j => j.id).join(',');
+    if (resDataKey === key && resPartidos.length) return;
+    resDataKey = key;
     resPartidos = [];
-    if (!jornadaId) return;
-    try {
-        const snap = await getDocs(resPartidoCol(jornadaId));
-        resPartidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    } catch (e) {
-        console.error('Error loading res partidos:', e);
+    const loaded = [];
+    for (const j of allJornadas) {
+        try {
+            const snap = await getDocs(resPartidoCol(j.id));
+            snap.docs.forEach(d => {
+                const p = { id: d.id, ...normalizeFields(d.data()) };
+                p._resJornadaId = j.id;
+                p._jornadaNumero = j.numero;
+                p._jornadaFecha = j.fecha;
+                p._teamAColor = getTeamColor(j.equipo_a_id) || '#4da6ff';
+                p._teamBColor = getTeamColor(j.equipo_b_id) || '#feb300';
+                loaded.push(p);
+            });
+        } catch (e) {
+            console.error('Error loading res partidos jornada ' + j.id, e);
+        }
     }
+    resPartidos = loaded;
+    buildResultScores();
+}
+
+function buildResultScores() {
+    resPartidos.forEach(p => initResultScore(p));
+}
+
+function initResultScore(p) {
+    const fin = p.estado === 'finalizado';
+    let base;
+    if (fin) {
+        base = {
+            set1_a: p.set1_a != null ? p.set1_a : 0,
+            set1_b: p.set1_b != null ? p.set1_b : 0,
+            set2_a: p.set2_a != null ? p.set2_a : 0,
+            set2_b: p.set2_b != null ? p.set2_b : 0,
+            tb1_a: p.tiebreak1_a != null ? p.tiebreak1_a : null,
+            tb1_b: p.tiebreak1_b != null ? p.tiebreak1_b : null,
+            tb2_a: p.tiebreak2_a != null ? p.tiebreak2_a : null,
+            tb2_b: p.tiebreak2_b != null ? p.tiebreak2_b : null,
+            stb_a: p.supertiebreak_a != null ? p.supertiebreak_a : null,
+            stb_b: p.supertiebreak_b != null ? p.supertiebreak_b : null,
+            _closed: { set1: true, set2: true, tb1: true, tb2: true, stb: true }
+        };
+    } else if (p.borrador) {
+        const d = p.borrador;
+        base = {
+            set1_a: d.set1_a != null ? d.set1_a : 0,
+            set1_b: d.set1_b != null ? d.set1_b : 0,
+            set2_a: d.set2_a != null ? d.set2_a : 0,
+            set2_b: d.set2_b != null ? d.set2_b : 0,
+            tb1_a: d.tb1_a != null ? d.tb1_a : null,
+            tb1_b: d.tb1_b != null ? d.tb1_b : null,
+            tb2_a: d.tb2_a != null ? d.tb2_a : null,
+            tb2_b: d.tb2_b != null ? d.tb2_b : null,
+            stb_a: d.stb_a != null ? d.stb_a : null,
+            stb_b: d.stb_b != null ? d.stb_b : null,
+            _closed: d._closed || {}
+        };
+    } else {
+        base = {
+            set1_a: 0, set1_b: 0,
+            set2_a: 0, set2_b: 0,
+            tb1_a: null, tb1_b: null,
+            tb2_a: null, tb2_b: null,
+            stb_a: null, stb_b: null,
+            _closed: {}
+        };
+    }
+    resultScores[p.id] = base;
+}
+
+// ── Draft autosave (borrador en la nube) ──
+function queueDraftSave(partidoId) {
+    const p = resPartidos.find(x => x.id === partidoId);
+    if (!p || p.estado === 'finalizado') return;
+    if (draftTimers.has(partidoId)) clearTimeout(draftTimers.get(partidoId));
+    const t = setTimeout(() => { draftTimers.delete(partidoId); persistDraft(partidoId); }, 300);
+    draftTimers.set(partidoId, t);
+}
+
+async function persistDraft(partidoId) {
+    const p = resPartidos.find(x => x.id === partidoId);
+    if (!p || p.estado === 'finalizado') return;
+    const rs = resultScores[partidoId];
+    if (!rs) return;
+    try {
+        await updateDoc(resPartidoDocRef(p._resJornadaId, partidoId), {
+            borrador: {
+                set1_a: rs.set1_a, set1_b: rs.set1_b,
+                set2_a: rs.set2_a, set2_b: rs.set2_b,
+                tb1_a: rs.tb1_a, tb1_b: rs.tb1_b,
+                tb2_a: rs.tb2_a, tb2_b: rs.tb2_b,
+                stb_a: rs.stb_a, stb_b: rs.stb_b,
+                _closed: rs._closed || {},
+                updatedAt: new Date()
+            }
+        });
+    } catch (e) {
+        console.error('Error guardando borrador', e);
+    }
+}
+
+function flushDrafts() {
+    if (!draftTimers.size) return;
+    draftTimers.forEach((t, id) => { clearTimeout(t); draftTimers.delete(id); persistDraft(id); });
 }
 
 // ── Points Application ──
@@ -1708,65 +2790,86 @@ async function applyMatchPoints(jornadaId, partidoId) {
 }
 
 // ── Save Resultado ──
-async function saveResultado() {
-    const jornadaId = resSelectedJornadaId;
-    const partidoId = editingResultadoId;
+async function saveResultado(partidoId) {
+    const partido = resPartidos.find(x => x.id === partidoId);
+    if (!partido) return;
+    const jornadaId = partido._resJornadaId;
     if (!jornadaId || !partidoId) return;
 
-    const s1Local = document.getElementById('res-s1-local')?.value ?? '';
-    const s1Vis = document.getElementById('res-s1-vis')?.value ?? '';
-    const s2Local = document.getElementById('res-s2-local')?.value ?? '';
-    const s2Vis = document.getElementById('res-s2-vis')?.value ?? '';
-    const tb1Local = document.getElementById('res-tb1-local')?.value ?? '';
-    const tb1Vis = document.getElementById('res-tb1-vis')?.value ?? '';
-    const tb2Local = document.getElementById('res-tb2-local')?.value ?? '';
-    const tb2Vis = document.getElementById('res-tb2-vis')?.value ?? '';
-    const stbLocal = document.getElementById('res-stb-local')?.value ?? '';
-    const stbVis = document.getElementById('res-stb-vis')?.value ?? '';
+    const rs = resultScores[partidoId];
+    if (!rs) return;
 
-    if (!validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis)) return;
+    const s1A = String(rs.set1_a), s1B = String(rs.set1_b);
+    const s2A = String(rs.set2_a), s2B = String(rs.set2_b);
+    const tb1A = rs.tb1_a != null ? String(rs.tb1_a) : '';
+    const tb1B = rs.tb1_b != null ? String(rs.tb1_b) : '';
+    const tb2A = rs.tb2_a != null ? String(rs.tb2_a) : '';
+    const tb2B = rs.tb2_b != null ? String(rs.tb2_b) : '';
+    const stbA = rs.stb_a != null ? String(rs.stb_a) : '';
+    const stbB = rs.stb_b != null ? String(rs.stb_b) : '';
 
-    const s1l = parseInt(s1Local), s1v = parseInt(s1Vis);
-    const s2l = parseInt(s2Local), s2v = parseInt(s2Vis);
-    const tb1l = tb1Local !== '' ? parseInt(tb1Local) : null;
-    const tb1v = tb1Vis !== '' ? parseInt(tb1Vis) : null;
-    const tb2l = tb2Local !== '' ? parseInt(tb2Local) : null;
-    const tb2v = tb2Vis !== '' ? parseInt(tb2Vis) : null;
-    const stbl = stbLocal !== '' ? parseInt(stbLocal) : null;
-    const stbv = stbVis !== '' ? parseInt(stbVis) : null;
+    if (!validateMatchScore(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB)) return;
 
-    const ganador = determineMatchWinner(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
-    const games = calculateGames(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
+    const s1l = parseInt(s1A), s1v = parseInt(s1B);
+    const s2l = parseInt(s2A), s2v = parseInt(s2B);
+    const tb1l = tb1A !== '' ? parseInt(tb1A) : null;
+    const tb1v = tb1B !== '' ? parseInt(tb1B) : null;
+    const tb2l = tb2A !== '' ? parseInt(tb2A) : null;
+    const tb2v = tb2B !== '' ? parseInt(tb2B) : null;
+    const stbl = stbA !== '' ? parseInt(stbA) : null;
+    const stbv = stbB !== '' ? parseInt(stbB) : null;
 
-    const partido = resPartidos.find(p => p.id === partidoId);
-    const ganadorEquipoId = ganador === 'local' ? partido?.equipo_local_id :
-                            ganador === 'visitante' ? partido?.equipo_visitante_id : null;
+    const ganador = determineMatchWinner(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB);
+    const games = calculateGames(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB);
+
+    const ganadorEquipoId = ganador === 'a' ? partido?.equipo_a_id :
+                            ganador === 'b' ? partido?.equipo_b_id : null;
 
     showLoading('Guardando resultado...');
     try {
         await updateDoc(resPartidoDocRef(jornadaId, partidoId), {
-            set1_local: s1l,
-            set1_visitante: s1v,
-            set2_local: s2l,
-            set2_visitante: s2v,
-            tiebreak1_local: tb1l,
-            tiebreak1_visitante: tb1v,
-            tiebreak2_local: tb2l,
-            tiebreak2_visitante: tb2v,
-            supertiebreak_local: stbl,
-            supertiebreak_visitante: stbv,
+            set1_a: s1l,
+            set1_b: s1v,
+            set2_a: s2l,
+            set2_b: s2v,
+            tiebreak1_a: tb1l,
+            tiebreak1_b: tb1v,
+            tiebreak2_a: tb2l,
+            tiebreak2_b: tb2v,
+            supertiebreak_a: stbl,
+            supertiebreak_b: stbv,
             ganador_equipo_id: ganadorEquipoId,
             estado: 'finalizado',
-            games_local: games.games_local,
-            games_visitante: games.games_visitante,
+            borrador: null,
+            games_a: games.games_a,
+            games_b: games.games_b,
             fecha_resultado: new Date(),
             puntos_aplicados: false
         });
 
         toast('Resultado guardado', 'success');
-        await loadResPartidos(jornadaId);
+        if (draftTimers.has(partidoId)) { clearTimeout(draftTimers.get(partidoId)); draftTimers.delete(partidoId); }
+        delete resEditing[partidoId];
+        if (partido) {
+            partido.estado = 'finalizado';
+            partido.set1_a = s1l; partido.set1_b = s1v;
+            partido.set2_a = s2l; partido.set2_b = s2v;
+            partido.tiebreak1_a = tb1l; partido.tiebreak1_b = tb1v;
+            partido.tiebreak2_a = tb2l; partido.tiebreak2_b = tb2v;
+            partido.supertiebreak_a = stbl; partido.supertiebreak_b = stbv;
+            partido.ganador_equipo_id = ganadorEquipoId;
+            partido.games_a = games.games_a; partido.games_b = games.games_b;
+            partido.borrador = null;
+        }
+        resultScores[partidoId] = {
+            set1_a: s1l, set1_b: s1v,
+            set2_a: s2l, set2_b: s2v,
+            tb1_a: tb1l, tb1_b: tb1v,
+            tb2_a: tb2l, tb2_b: tb2v,
+            stb_a: stbl, stb_b: stbv,
+            _closed: { set1: true, set2: true, tb1: true, tb2: true, stb: true }
+        };
         await applyMatchPoints(jornadaId, partidoId);
-        editingResultadoId = null;
         renderResultados();
     } catch (e) {
         toast('Error al guardar resultado', 'error');
@@ -1777,43 +2880,61 @@ async function saveResultado() {
 }
 
 // ── Clear Resultado ──
-async function clearResultado() {
-    const jornadaId = resSelectedJornadaId;
-    const partidoId = editingResultadoId;
-    if (!jornadaId || !partidoId) return;
-
+async function clearResultado(partidoId) {
     const partido = resPartidos.find(p => p.id === partidoId);
-    if (!partido || partido.estado !== 'finalizado') return;
+    if (!partido) return;
+    const jornadaId = partido._resJornadaId;
+    if (!jornadaId || !partidoId) return;
+    if (partido.estado !== 'finalizado') return;
 
-    if (!confirm('¿Limpiar este resultado?')) return;
+    if (!confirm('¿Borrar este resultado?')) return;
 
-    showLoading('Limpiando resultado...');
+    showLoading('Borrando resultado...');
     try {
         await updateDoc(resPartidoDocRef(jornadaId, partidoId), {
-            set1_local: null,
-            set1_visitante: null,
-            set2_local: null,
-            set2_visitante: null,
-            tiebreak1_local: null,
-            tiebreak1_visitante: null,
-            tiebreak2_local: null,
-            tiebreak2_visitante: null,
-            supertiebreak_local: null,
-            supertiebreak_visitante: null,
+            set1_a: null,
+            set1_b: null,
+            set2_a: null,
+            set2_b: null,
+            tiebreak1_a: null,
+            tiebreak1_b: null,
+            tiebreak2_a: null,
+            tiebreak2_b: null,
+            supertiebreak_a: null,
+            supertiebreak_b: null,
             ganador_equipo_id: null,
             estado: 'pendiente',
-            games_local: 0,
-            games_visitante: 0,
+            borrador: null,
+            games_a: 0,
+            games_b: 0,
             fecha_resultado: null,
             puntos_aplicados: false
         });
 
-        toast('Resultado limpiado', 'success');
-        editingResultadoId = null;
-        await loadResPartidos(jornadaId);
+        toast('Resultado borrado', 'success');
+        if (draftTimers.has(partidoId)) { clearTimeout(draftTimers.get(partidoId)); draftTimers.delete(partidoId); }
+        if (partido) {
+            partido.estado = 'pendiente';
+            partido.set1_a = null; partido.set1_b = null;
+            partido.set2_a = null; partido.set2_b = null;
+            partido.tiebreak1_a = null; partido.tiebreak1_b = null;
+            partido.tiebreak2_a = null; partido.tiebreak2_b = null;
+            partido.supertiebreak_a = null; partido.supertiebreak_b = null;
+            partido.ganador_equipo_id = null;
+            partido.games_a = 0; partido.games_b = 0;
+            partido.borrador = null;
+        }
+        resultScores[partidoId] = {
+            set1_a: 0, set1_b: 0,
+            set2_a: 0, set2_b: 0,
+            tb1_a: null, tb1_b: null,
+            tb2_a: null, tb2_b: null,
+            stb_a: null, stb_b: null,
+            _closed: {}
+        };
         renderResultados();
     } catch (e) {
-        toast('Error al limpiar resultado', 'error');
+        toast('Error al borrar resultado', 'error');
         console.error(e);
     } finally {
         hideLoading();
@@ -1823,8 +2944,20 @@ async function clearResultado() {
 // ── Render Resultados ──
 function renderResultados() {
     const panel = document.getElementById('panel-resultados');
+    if (!panel) return;
+
+    if (resView === 'encurso') {
+        renderResEnCurso(panel);
+        return;
+    }
 
     if (resSelectedJornadaId) {
+        renderResDetail(panel);
+        return;
+    }
+
+    if (allJornadas.length) {
+        resSelectedJornadaId = allJornadas[allJornadas.length - 1].id;
         renderResDetail(panel);
         return;
     }
@@ -1839,9 +2972,9 @@ function renderResultados() {
         '<select id="res-jornada-select">' +
         '<option value="">— Seleccionar jornada —</option>' +
         allJornadas.map(j => {
-            const localName = getTeamName(j.equipo_local_id) || '?';
-            const visitName = getTeamName(j.equipo_visitante_id) || '?';
-            return '<option value="' + j.id + '">Jornada ' + j.numero + ' — ' + esc(localName) + ' VS ' + esc(visitName) + '</option>';
+            const teamAName2 = getTeamName(j.equipo_a_id) || '?';
+            const teamBName2 = getTeamName(j.equipo_b_id) || '?';
+            return '<option value="' + j.id + '">Jornada ' + j.numero + ' — ' + esc(teamAName2) + ' VS ' + esc(teamBName2) + '</option>';
         }).join('') +
         '</select></div>' +
         '</div>';
@@ -1854,277 +2987,467 @@ function renderResultados() {
 
     document.getElementById('res-jornada-select')?.addEventListener('change', (e) => {
         resSelectedJornadaId = e.target.value || null;
-        editingResultadoId = null;
         if (resSelectedJornadaId) renderResultados();
     });
+}
+
+function resViewSwitchHtml(openCount) {
+    return '<div class="res-view-bar">' +
+        '<div class="res-view-switch">' +
+        '<button class="res-view-btn' + (resView === 'encurso' ? ' active' : '') + '" data-res-view="encurso">En curso' + (openCount != null ? ' (' + openCount + ')' : '') + '</button>' +
+        '<button class="res-view-btn' + (resView === 'jornada' ? ' active' : '') + '" data-res-view="jornada">Por jornada</button>' +
+        '</div>' +
+        '</div>';
+}
+
+async function renderResEnCurso(panel) {
+    panelLoading(panel, 'Cargando resultados en curso...');
+    await ensureResData();
+
+    if (!resPartidos.length) {
+        panel.innerHTML = '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">sports_score</span><p>No hay partidos cargados.</p></div>';
+        return;
+    }
+
+    const openCount = resPartidos.filter(p => p.estado !== 'finalizado').length;
+
+    const groups = [];
+    allJornadas.forEach(j => {
+        const items = resPartidos.filter(p => p._resJornadaId === j.id);
+        if (!items.length) return;
+        const open = items.filter(p => p.estado !== 'finalizado');
+        const done = items.filter(p => p.estado === 'finalizado');
+        const sorted = open.concat(done);
+        if (!sorted.length) return;
+        groups.push({ j, items: sorted });
+    });
+
+    let html = '';
+    html += resViewSwitchHtml(openCount);
+    html += '<input type="text" id="result-search" class="search-input" placeholder="Buscar por nombre de jugador...">';
+
+    groups.forEach(g => {
+        const fechaStr = formatDate(g.j.fecha) || '';
+        html += '<div class="res-jornada-group">' +
+            '<div class="res-jornada-head"><span class="material-symbols-outlined" style="font-size:0.8rem;">event</span> Jornada ' + esc(String(g.j.numero)) +
+            (fechaStr ? ' · ' + esc(fechaStr) : '') + '</div>';
+        g.items.forEach(p => { html += resCardHtml(p); });
+        html += '</div>';
+    });
+
+    panel.innerHTML = html;
+    bindResPanelEvents(panel);
+    panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
 }
 
 async function renderResDetail(panel) {
     const jornada = allJornadas.find(j => j.id === resSelectedJornadaId);
     if (!jornada) { resSelectedJornadaId = null; renderResultados(); return; }
 
-    const localName = getTeamName(jornada.equipo_local_id) || jornada.equipo_local_nombre || '?';
-    const visitName = getTeamName(jornada.equipo_visitante_id) || jornada.equipo_visitante_nombre || '?';
-    const localColor = getTeamColor(jornada.equipo_local_id) || '#888';
-    const visitColor = getTeamColor(jornada.equipo_visitante_id) || '#888';
-
-    if (!resPartidos.length || resPartidos[0]?._resJornadaId !== resSelectedJornadaId) {
-        await loadResPartidos(resSelectedJornadaId);
-        resPartidos.forEach(p => p._resJornadaId = resSelectedJornadaId);
-    }
+    await ensureResData();
+    const partidos = resPartidos.filter(p => p._resJornadaId === resSelectedJornadaId);
 
     let html = '';
-
-    html += '<div class="card" style="border-top:3px solid var(--primary);">' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem;">' +
-        '<div>' +
-        '<div style="font-family:Lexend;font-weight:600;font-size:1rem;"><span class="material-symbols-outlined" style="font-size:1rem;color:var(--primary);vertical-align:middle;">sports_score</span> RESULTADOS — Jornada ' + esc(String(jornada.numero || '')) + '</div>' +
-        '<div style="font-size:0.82rem;color:var(--on-surface-variant-40);margin-top:0.15rem;">' + esc(getJornadaDateFormatted(jornada.fecha)) + '</div>' +
-        '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.3rem;flex-wrap:wrap;">' +
-        '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.9rem;">' +
-        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + localColor + ';"></span>' + esc(localName) +
-        '</span>' +
-        '<span style="font-family:Lexend;font-weight:800;font-size:0.85rem;color:var(--on-surface-variant-40);">VS</span>' +
-        '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.9rem;">' +
-        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + visitColor + ';"></span>' + esc(visitName) +
-        '</span>' +
+    html += resViewSwitchHtml();
+    html += '<div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">' +
+        '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_score</span> Resultados Jornada ' + esc(String(jornada.numero)) + '</span>' +
+        '<button class="btn btn-sm btn-outline" id="btn-back-res-jornadas" title="Cambiar jornada"><span class="material-symbols-outlined" style="font-size:0.8rem;">arrow_back</span></button>' +
         '</div>' +
-        '</div>' +
-        '<button class="btn btn-sm btn-outline" id="btn-back-res-jornadas"><span class="material-symbols-outlined" style="font-size:0.8rem;">arrow_back</span></button>' +
-        '</div>' +
-        '</div>';
+        '<input type="text" id="result-search" class="search-input" placeholder="Buscar por nombre de jugador...">';
 
-    let localWins = 0, visWins = 0;
-    const finalizados = resPartidos.filter(p => p.estado === 'finalizado');
-    finalizados.forEach(p => {
-        if (p.ganador_equipo_id === jornada.equipo_local_id) localWins++;
-        else if (p.ganador_equipo_id === jornada.equipo_visitante_id) visWins++;
-    });
-
-    const allDone = resPartidos.length === 7 && resPartidos.every(p => p.estado === 'finalizado');
-
-    html += '<div class="card" style="border-left:4px solid ' + (allDone ? 'var(--secondary)' : 'var(--primary)') + ';">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">' +
-        '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">Resumen de la Jornada</div>' +
-        (allDone
-            ? '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">check_circle</span> Completo</span>'
-            : '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + finalizados.length + '/7 finalizados</span>') +
-        '</div>' +
-        '<div style="display:flex;gap:1rem;">' +
-        '<div style="flex:1;">' +
-        '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' +
-        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + localColor + ';"></span> ' + esc(localName) +
-        '</div>' +
-        '<div style="font-size:0.82rem;">Partidos: <strong>' + localWins + '</strong></div>' +
-        '</div>' +
-        '<div style="flex:1;">' +
-        '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' +
-        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + visitColor + ';"></span> ' + esc(visitName) +
-        '</div>' +
-        '<div style="font-size:0.82rem;">Partidos: <strong>' + visWins + '</strong></div>' +
-        '</div>' +
-        '</div>';
-
-    if (allDone) {
-        const jornadaGanador = localWins > visWins ? localName : (visWins > localWins ? visitName : 'Empate');
-        const ptsLocal = localWins + (localWins > visWins ? 5 : 0);
-        const ptsVis = visWins + (visWins > localWins ? 5 : 0);
-        html += '<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--white-5);">' +
-            '<div style="font-size:0.78rem;color:var(--secondary);font-weight:600;">' +
-            '🏆 Ganador de la jornada: ' + esc(jornadaGanador) +
-            '</div>' +
-            '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-top:0.2rem;">' +
-            esc(localName) + ': ' + localWins + ' + ' + (localWins > visWins ? '5' : '0') + ' = <strong>' + ptsLocal + '</strong> pts · ' +
-            esc(visitName) + ': ' + visWins + ' + ' + (visWins > localWins ? '5' : '0') + ' = <strong>' + ptsVis + '</strong> pts' +
-            '</div>' +
-            '</div>';
-    }
-
-    html += '</div>';
-
-    if (editingResultadoId) {
-        html += renderResultadoForm(jornada);
-    }
-
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos</div>';
+    if (!partidos.length) {
+        html += '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">sports_score</span><p>No hay partidos en esta jornada.</p></div>';
+panel.innerHTML = html;
+    bindResPanelEvents(panel);
+    panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
+    panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
+}
 
     DRAW_CATEGORIAS.forEach((cat, idx) => {
-        const partido = resPartidos.find(p => p.categoria === cat);
+        const partido = partidos.find(p => p.categoria === cat);
         if (!partido) return;
-
-        const num = String(idx + 1).padStart(2, '0');
-        const isFinalizado = partido.estado === 'finalizado';
-
-        const j1Name = getJugadorNombre(partido.jugador_local_1_id);
-        const j2Name = getJugadorNombre(partido.jugador_local_2_id);
-        const j3Name = getJugadorNombre(partido.jugador_visitante_1_id);
-        const j4Name = getJugadorNombre(partido.jugador_visitante_2_id);
-
-        const borderColor = isFinalizado ? (partido.ganador_equipo_id === jornada.equipo_local_id ? localColor : visitColor) : 'var(--on-surface-variant-40)';
-
-        html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
-            '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
-            '<div style="flex:1;min-width:0;">' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(cat) + '</span>' +
-            (isFinalizado
-                ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>'
-                : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
-            '</div>' +
-            '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + localColor + ';"></span>' +
-            '<span>' + esc(j1Name || '—') + ' / ' + esc(j2Name || '—') + '</span>' +
-            '</div>' +
-            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + visitColor + ';"></span>' +
-            '<span>' + esc(j3Name || '—') + ' / ' + esc(j4Name || '—') + '</span>' +
-            '</div>' +
-            '</div>';
-
-        if (isFinalizado) {
-            const s1 = partido.set1_local + '-' + partido.set1_visitante;
-            const s2 = partido.set2_local + '-' + partido.set2_visitante;
-            const tb1 = (partido.tiebreak1_local != null && partido.tiebreak1_visitante != null) ? ' · TB1 ' + partido.tiebreak1_local + '-' + partido.tiebreak1_visitante : '';
-            const tb2 = (partido.tiebreak2_local != null && partido.tiebreak2_visitante != null) ? ' · TB2 ' + partido.tiebreak2_local + '-' + partido.tiebreak2_visitante : '';
-            const hasSTB = partido.supertiebreak_local != null && partido.supertiebreak_visitante != null;
-            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_local + '-' + partido.supertiebreak_visitante : '';
-            const ganadorName = partido.ganador_equipo_id === jornada.equipo_local_id ? localName : visitName;
-            html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
-                '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
-                ' · <span style="color:var(--secondary);">🏆 ' + esc(ganadorName) + '</span>' +
-                '</div>';
-        }
-
-        html += '</div>' +
-            '<div style="display:flex;gap:0.3rem;">' +
-            '<button class="btn btn-sm btn-outline" data-res-edit="' + partido.id + '" title="Ingresar/editar resultado"><span class="material-symbols-outlined" style="font-size:0.8rem;">' + (isFinalizado ? 'edit' : 'sports_score') + '</span></button>' +
-            (isFinalizado ? '<button class="btn btn-sm btn-danger" data-res-clear="' + partido.id + '" title="Limpiar resultado"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' : '') +
-            '</div>' +
-            '</div>' +
-            '</div>';
+        html += resCardHtml(partido);
     });
 
     panel.innerHTML = html;
+    bindResPanelEvents(panel);
+    panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
+    panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
+}
 
-    document.getElementById('btn-back-res-jornadas')?.addEventListener('click', () => {
-        resSelectedJornadaId = null;
-        resPartidos = [];
-        editingResultadoId = null;
-        renderResultados();
+function getJornadaNumero(partido) {
+    // Busca el número actualizado de la jornada en allJornadas (fuente de verdad).
+    // Evita inconsistencias si _jornadaNumero fue cacheado con un valor viejo.
+    const j = allJornadas.find(x => x.id === (partido._resJornadaId || partido._jornadaId));
+    return j ? j.numero : (partido._jornadaNumero || '?');
+}
+
+function resCardHtml(partido) {
+    const isFinalizado = partido.estado === 'finalizado';
+    const rs = resultScores[partido.id] || { set1_a: 0, set1_b: 0, set2_a: 0, set2_b: 0, tb1_a: null, tb1_b: null, tb2_a: null, tb2_b: null, stb_a: null, stb_b: null, _closed: {} };
+
+    const j1Name = getJugadorNombre(partido.jugador_a_1_id) || '—';
+    const j2Name = getJugadorNombre(partido.jugador_a_2_id) || '—';
+    const j3Name = getJugadorNombre(partido.jugador_b_1_id) || '—';
+    const j4Name = getJugadorNombre(partido.jugador_b_2_id) || '—';
+
+    const catIdx = DRAW_CATEGORIAS.indexOf(partido.categoria);
+    const num = catIdx >= 0 ? String(catIdx + 1) : '?';
+
+    const teamAColor = partido._teamAColor || getTeamColor(partido.equipo_a_id) || '#4da6ff';
+    const teamBColor = partido._teamBColor || getTeamColor(partido.equipo_b_id) || '#feb300';
+
+    const fechaStr = formatDate(partido._jornadaFecha) || '';
+
+    if (isFinalizado && !resEditing[partido.id]) {
+        return resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamAColor, teamBColor, num, fechaStr);
+    }
+
+    const suggestedUnit = getActiveUnit(rs);
+    const phaseLabel = suggestedUnit ? unitLabel(suggestedUnit) : (isFinalizado ? 'Finalizado' : 'En disputa');
+    const set1Win = setWinner(rs.set1_a, rs.set1_b, rs.tb1_a, rs.tb1_b);
+    const set2Win = setWinner(rs.set2_a, rs.set2_b, rs.tb2_a, rs.tb2_b);
+    const RES_UNITS = [
+        { key: 'set1', label: 'Set 1' },
+        { key: 'set2', label: 'Set 2' }
+    ];
+    if (isTiebreakSet(rs.set1_a, rs.set1_b)) RES_UNITS.push({ key: 'tb1', label: 'Tie Break 1' });
+    if (isTiebreakSet(rs.set2_a, rs.set2_b)) RES_UNITS.push({ key: 'tb2', label: 'Tie Break 2' });
+    if (!!set1Win && !!set2Win && set1Win !== set2Win) RES_UNITS.push({ key: 'stb', label: 'Super Tie Break' });
+
+    const unitHtml = RES_UNITS.map(u => {
+        const score = getUnitScore(rs, u.key);
+        const closed = isUnitClosed(u.key, rs);
+        const confirmed = !!(rs._closed && rs._closed[u.key]);
+        const isActive = suggestedUnit === u.key;
+        let ua = '', ub = '';
+        if (score.a > score.b) { ua = 'state-win'; ub = 'state-lose'; }
+        else if (score.b > score.a) { ua = 'state-lose'; ub = 'state-win'; }
+        else { ua = 'state-tie'; ub = 'state-tie'; }
+        const badge = closed
+            ? (confirmed ? '<span class="res-badge res-badge-ok" title="Cerrado y confirmado">✓</span>' : '<span class="res-badge res-badge-warn" title="Cerrado, falta confirmar">!</span>')
+            : '';
+        return '<div class="res-unit' + (isActive ? ' res-unit-active' : '') + '" data-unit="' + u.key + '">' +
+            '<div class="res-unit-label">' + u.label + badge + '</div>' +
+            '<div class="match-pair-row">' +
+            '<span class="res-side-tag team-blue">A</span>' +
+            '<span class="res-unit-score team-blue ' + ua + '" data-score-a="' + u.key + '">' + score.a + '</span>' +
+            '<span class="match-score-ctl">' +
+            '<button class="score-btn team-blue" data-res-adj="' + partido.id + '" data-unit="' + u.key + '" data-team="a" data-delta="-1">−</button>' +
+            '<button class="score-btn team-blue" data-res-adj="' + partido.id + '" data-unit="' + u.key + '" data-team="a" data-delta="1">+</button>' +
+            '</span>' +
+            '<span class="res-sep">–</span>' +
+            '<span class="match-score-ctl">' +
+            '<button class="score-btn team-gold" data-res-adj="' + partido.id + '" data-unit="' + u.key + '" data-team="b" data-delta="-1">−</button>' +
+            '<button class="score-btn team-gold" data-res-adj="' + partido.id + '" data-unit="' + u.key + '" data-team="b" data-delta="1">+</button>' +
+            '</span>' +
+            '<span class="res-unit-score team-gold ' + ub + '" data-score-b="' + u.key + '">' + score.b + '</span>' +
+            '<span class="res-side-tag team-gold">B</span>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+
+    return '<div class="card res-card' + (isFinalizado ? ' res-card-dim' : ' res-card-open') + '" data-res-card="' + partido.id + '">' +
+        '<div class="match-info">' +
+        '<div class="match-category-line" style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--accent-purple);margin-bottom:0.3rem;">' +
+            esc(formatCategoria(partido.categoria || '')) +
+            (!isFinalizado ? ' <span class="res-live-badge"><span class="res-live-dot"></span>EN CURSO</span>' : ' <span class="res-final-badge"><span class="res-final-dot"></span>FINALIZADO</span>') +
+        '</div>' +
+        '<div class="match-pair-row res-team-header">' +
+        '<div class="match-pair-name" style="flex:1;">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';margin-right:0.3rem;vertical-align:middle;"></span>' +
+        esc(j1Name + ' / ' + j2Name) + '</div>' +
+        '<div class="match-pair-name" style="flex:1;text-align:right;">' +
+        esc(j3Name + ' / ' + j4Name) +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';margin-left:0.3rem;vertical-align:middle;"></span>' +
+        '</div>' +
+        '</div>' +
+
+        unitHtml +
+
+        '<div class="match-meta">' +
+        (fechaStr ? '<span class="res-meta-date">' + esc(fechaStr) + '</span>' : '') +
+        ' · <span class="res-meta-jornada">Jornada ' + esc(String(getJornadaNumero(partido))) + '</span>' +
+        '</div>' +
+        '<div class="btn-group-spaced btn-group-inline">' +
+        '<button class="btn btn-primary btn-sm btn-compact" data-res-save="' + partido.id + '"><span class="material-symbols-outlined" style="font-size:0.65rem;">' + (isFinalizado ? 'update' : 'save') + '</span> ' + (isFinalizado ? 'actualizar' : 'registrar') + '</button>' +
+        (isFinalizado ? '<button class="btn btn-sm btn-danger btn-compact" data-res-clear="' + partido.id + '"><span class="material-symbols-outlined" style="font-size:0.65rem;">delete</span> borrar</button>' : '') +
+        (resEditing[partido.id] ? '<button class="btn btn-sm btn-outline btn-compact btn-icon" data-res-collapse="' + partido.id + '" title="Cerrar edición"><span class="material-symbols-outlined" style="font-size:0.75rem;">close</span></button>' : '') +
+        '</div>' +
+        '</div>' +
+        '</div>';
+}
+
+function resUnitToken(a, b, tbA, tbB) {
+    if (a === 4 && b === 4 && tbA != null && tbB != null) {
+        return {
+            a: { text: '5(' + tbA + ')', win: tbA > tbB },
+            b: { text: '5(' + tbB + ')', win: tbB > tbA }
+        };
+    }
+    return {
+        a: { text: String(a), win: a > b },
+        b: { text: String(b), win: b > a }
+    };
+}
+
+function buildResScoreTokens(rs) {
+    const s1 = resUnitToken(rs.set1_a, rs.set1_b, rs.tb1_a, rs.tb1_b);
+    const s2 = resUnitToken(rs.set2_a, rs.set2_b, rs.tb2_a, rs.tb2_b);
+    const tokens = { a: [s1.a, s2.a], b: [s1.b, s2.b] };
+    if (rs.stb_a != null && rs.stb_b != null) {
+        tokens.a.push({ text: String(rs.stb_a), win: rs.stb_a > rs.stb_b });
+        tokens.b.push({ text: String(rs.stb_b), win: rs.stb_b > rs.stb_a });
+    }
+    return tokens;
+}
+
+function renderResSetTokens(tokens) {
+    return tokens.map(t =>
+        '<span class="res-set' + (t.win ? ' res-set-win' : ' res-set-lose') + '">' + esc(t.text) + '</span>'
+    ).join('');
+}
+
+function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamAColor, teamBColor, num, fechaStr) {
+    const ganadorId = partido.ganador_equipo_id;
+    const aWins = ganadorId === partido.equipo_a_id;
+    const bWins = ganadorId === partido.equipo_b_id;
+
+    const tokens = buildResScoreTokens(rs);
+    const scoreA = renderResSetTokens(tokens.a);
+    const scoreB = renderResSetTokens(tokens.b);
+    const ganadorTxt = aWins ? (j1Name + ' / ' + j2Name) : (j3Name + ' / ' + j4Name);
+
+    const jorLabel = 'Jornada ' + esc(String(getJornadaNumero(partido)));
+    const headerParts = [];
+    if (fechaStr) headerParts.push('<span class="res-meta-date">' + esc(fechaStr) + '</span>');
+    headerParts.push('<span class="res-meta-jornada">' + jorLabel + '</span>');
+    headerParts.push('<span class="res-meta-category">' + esc(formatCategoria(partido.categoria || '')) + '</span>');
+
+    return '<div class="res-public-card res-final-admin" data-res-card="' + partido.id + '">' +
+        '<div class="res-public-header">' + headerParts.join(' · ') + ' · <span class="res-final-badge"><span class="res-final-dot"></span>FINALIZADO</span>' + '</div>' +
+        '<div class="res-public-player">' +
+        '<div class="res-public-dot" style="background:' + teamAColor + ';"></div>' +
+        '<div>' +
+        '<div class="res-public-name">' + esc(j1Name + ' / ' + j2Name) + '</div>' +
+        '<div class="res-public-rank">—</div>' +
+        '</div>' +
+        '<div class="res-public-score">' + scoreA + '</div>' +
+        '</div>' +
+        '<div class="res-public-player">' +
+        '<div class="res-public-dot" style="background:' + teamBColor + ';"></div>' +
+        '<div>' +
+        '<div class="res-public-name">' + esc(j3Name + ' / ' + j4Name) + '</div>' +
+        '<div class="res-public-rank">—</div>' +
+        '</div>' +
+        '<div class="res-public-score">' + scoreB + '</div>' +
+        '</div>' +
+        '<div class="res-winner-declaration"><span class="res-winner-label">Ganó</span> <span class="res-winner-name">' + esc(ganadorTxt) + '</span></div>' +
+        '<div class="btn-group-spaced">' +
+        '<button class="btn btn-primary btn-sm btn-compact btn-icon" data-res-edit="' + partido.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.85rem;">edit</span></button>' +
+        '<button class="btn btn-sm btn-danger btn-compact btn-icon" data-res-clear="' + partido.id + '" title="Borrar"><span class="material-symbols-outlined" style="font-size:0.85rem;">delete</span></button>' +
+        '</div>' +
+        '</div>';
+}
+
+function bindResPanelEvents(panel) {
+    document.getElementById('result-search')?.addEventListener('input', () => {
+        const term = document.getElementById('result-search').value.toLowerCase();
+        panel.querySelectorAll('.card, .res-public-card').forEach(card => {
+            card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
+        });
     });
 
-    panel.querySelectorAll('[data-res-edit]').forEach(b => b.addEventListener('click', () => {
-        editingResultadoId = b.dataset.resEdit;
+    panel.querySelectorAll('[data-res-view]').forEach(b => b.addEventListener('click', () => {
+        resView = b.dataset.resView;
+        flushDrafts();
         renderResultados();
     }));
 
-    panel.querySelectorAll('[data-res-clear]').forEach(b => b.addEventListener('click', () => safeAction(() => {
-        editingResultadoId = b.dataset.resClear;
-        clearResultado();
-    })));
-
-    document.getElementById('btn-save-resultado')?.addEventListener('click', () => safeAction(saveResultado));
-    document.getElementById('btn-cancel-resultado')?.addEventListener('click', () => { editingResultadoId = null; renderResultados(); });
+    document.getElementById('btn-back-res-jornadas')?.addEventListener('click', () => {
+        resSelectedJornadaId = null;
+        renderResultados();
+    });
 }
 
-function renderResultadoForm(jornada) {
-    const partido = resPartidos.find(p => p.id === editingResultadoId);
-    if (!partido) return '';
+function bindResCardEvents(card, panel) {
+    card.querySelectorAll('[data-res-adj]').forEach(b => b.addEventListener('click', () => {
+        const id = b.dataset.resAdj;
+        const team = b.dataset.team;
+        const delta = parseInt(b.dataset.delta);
+        const unit = b.dataset.unit;
+        if (adjustUnit(id, unit, team, delta)) {
+            updateResCardInPlace(id, panel);
+            queueDraftSave(id);
+            maybeConfirmUnit(id, unit, panel);
+        }
+    }));
 
-    const isFinalizado = partido.estado === 'finalizado';
-    const s1l = isFinalizado && partido.set1_local != null ? partido.set1_local : '';
-    const s1v = isFinalizado && partido.set1_visitante != null ? partido.set1_visitante : '';
-    const s2l = isFinalizado && partido.set2_local != null ? partido.set2_local : '';
-    const s2v = isFinalizado && partido.set2_visitante != null ? partido.set2_visitante : '';
-    const tb1l = isFinalizado && partido.tiebreak1_local != null ? partido.tiebreak1_local : '';
-    const tb1v = isFinalizado && partido.tiebreak1_visitante != null ? partido.tiebreak1_visitante : '';
-    const tb2l = isFinalizado && partido.tiebreak2_local != null ? partido.tiebreak2_local : '';
-    const tb2v = isFinalizado && partido.tiebreak2_visitante != null ? partido.tiebreak2_visitante : '';
-    const stbl = isFinalizado && partido.supertiebreak_local != null ? partido.supertiebreak_local : '';
-    const stbv = isFinalizado && partido.supertiebreak_visitante != null ? partido.supertiebreak_visitante : '';
+    card.querySelectorAll('[data-res-save]').forEach(b => b.addEventListener('click', () => safeAction(() => saveResultado(b.dataset.resSave))));
+    card.querySelectorAll('[data-res-clear]').forEach(b => b.addEventListener('click', () => confirmBorrarResultado(b.dataset.resClear)));
+    card.querySelectorAll('[data-res-edit]').forEach(b => b.addEventListener('click', () => {
+        resEditing[b.dataset.resEdit] = true;
+        renderResultados();
+    }));
+    card.querySelectorAll('[data-res-collapse]').forEach(b => b.addEventListener('click', () => {
+        delete resEditing[b.dataset.resCollapse];
+        renderResultados();
+    }));
+}
 
-    const localName = getTeamName(jornada.equipo_local_id) || '?';
-    const visitName = getTeamName(jornada.equipo_visitante_id) || '?';
-    const localColor = getTeamColor(jornada.equipo_local_id) || '#888';
-    const visitColor = getTeamColor(jornada.equipo_visitante_id) || '#888';
+function updateResCardInPlace(id, panel) {
+    const oldCard = panel.querySelector('[data-res-card="' + id + '"]');
+    const partido = resPartidos.find(p => p.id === id);
+    if (!oldCard && !partido) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = resCardHtml(partido);
+    const newCard = tmp.firstChild;
+    if (oldCard) oldCard.replaceWith(newCard);
+    bindResCardEvents(newCard, panel);
+}
 
-    let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
-        '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
-        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">sports_score</span> ' +
-        (isFinalizado ? 'Editar' : 'Ingresar') + ' Resultado — ' + esc(partido.categoria || '') +
+function setWinner(sa, sb, tba, tbb) {
+    if (tba != null && tbb != null) return tba > tbb ? 'a' : (tbb > tba ? 'b' : null);
+    if (sa > sb) return 'a';
+    if (sb > sa) return 'b';
+    return null;
+}
+
+function getActiveUnit(rs) {
+    if (rs.set1_a === 4 && rs.set1_b === 4) {
+        if (!isTBComplete(rs.tb1_a, rs.tb1_b)) return 'tb1';
+    } else if (!isSetGamesDone(rs.set1_a, rs.set1_b)) {
+        return 'set1';
+    }
+    if (rs.set2_a === 4 && rs.set2_b === 4) {
+        if (!isTBComplete(rs.tb2_a, rs.tb2_b)) return 'tb2';
+    } else if (!isSetGamesDone(rs.set2_a, rs.set2_b)) {
+        return 'set2';
+    }
+    const a = (setWinner(rs.set1_a, rs.set1_b, rs.tb1_a, rs.tb1_b) === 'a' ? 1 : 0) +
+              (setWinner(rs.set2_a, rs.set2_b, rs.tb2_a, rs.tb2_b) === 'a' ? 1 : 0);
+    const b = 2 - a;
+    if (a === 1 && b === 1) return 'stb';
+    return null;
+}
+
+const RES_UNIT_LABELS = {
+    set1: 'Set 1',
+    set2: 'Set 2',
+    tb1: 'Tie Break 1',
+    tb2: 'Tie Break 2',
+    stb: 'Super Tie Break'
+};
+
+function unitLabel(unit) {
+    return RES_UNIT_LABELS[unit] || unit;
+}
+
+function getUnitScore(rs, unit) {
+    switch (unit) {
+        case 'set1': return { a: rs.set1_a, b: rs.set1_b };
+        case 'set2': return { a: rs.set2_a, b: rs.set2_b };
+        case 'tb1': return { a: rs.tb1_a != null ? rs.tb1_a : 0, b: rs.tb1_b != null ? rs.tb1_b : 0 };
+        case 'tb2': return { a: rs.tb2_a != null ? rs.tb2_a : 0, b: rs.tb2_b != null ? rs.tb2_b : 0 };
+        case 'stb': return { a: rs.stb_a != null ? rs.stb_a : 0, b: rs.stb_b != null ? rs.stb_b : 0 };
+        default: return { a: 0, b: 0 };
+    }
+}
+
+function isUnitClosed(unit, rs) {
+    const s = getUnitScore(rs, unit);
+    if (unit === 'set1' || unit === 'set2') return isSetGamesDone(s.a, s.b);
+    if (unit === 'tb1' || unit === 'tb2') return isTBComplete(s.a, s.b);
+    if (unit === 'stb') return isValidSupertiebreak(s.a, s.b);
+    return false;
+}
+
+function adjustUnit(id, unit, team, delta) {
+    const rs = resultScores[id];
+    if (!rs) return false;
+    rs._closed = rs._closed || {};
+    let changed = false;
+
+    if (unit === 'set1' || unit === 'set2') {
+        const keyA = unit + '_a', keyB = unit + '_b';
+        const a = rs[keyA], b = rs[keyB];
+        if (delta > 0 && !canIncrementGames(a + (team === 'a' ? delta : 0), b + (team === 'b' ? delta : 0))) return false;
+        const r = adjustScore(a, b, team, delta);
+        rs[keyA] = r.a; rs[keyB] = r.b;
+        if (!isSetGamesDone(r.a, r.b)) rs._closed[unit] = false;
+        changed = (r.a !== a) || (r.b !== b);
+    } else if (unit === 'tb1' || unit === 'tb2') {
+        const keyA = unit + '_a', keyB = unit + '_b';
+        if (rs[keyA] == null) { rs[keyA] = 0; rs[keyB] = 0; }
+        const a = rs[keyA], b = rs[keyB];
+        const r = adjustTB(a, b, team, delta);
+        rs[keyA] = r.a; rs[keyB] = r.b;
+        if (!isTBComplete(r.a, r.b)) rs._closed[unit] = false;
+        changed = (r.a !== a) || (r.b !== b);
+    } else if (unit === 'stb') {
+        if (rs.stb_a == null) { rs.stb_a = 0; rs.stb_b = 0; }
+        const a = rs.stb_a, b = rs.stb_b;
+        const r = adjustSTB(a, b, team, delta);
+        rs.stb_a = r.a; rs.stb_b = r.b;
+        if (!isValidSupertiebreak(r.a, r.b)) rs._closed[unit] = false;
+        changed = (r.a !== a) || (r.b !== b);
+    }
+    return changed;
+}
+
+function maybeConfirmUnit(id, unit, panel) {
+    const rs = resultScores[id];
+    if (!rs) return;
+    rs._closed = rs._closed || {};
+    if (rs._closed[unit]) return;
+    if (!isUnitClosed(unit, rs)) return;
+    const score = getUnitScore(rs, unit);
+    showConfirmModal(
+        '¿Confirmás que ' + unitLabel(unit) + ' terminó ' + score.a + ' - ' + score.b + '?',
+        () => { rs._closed[unit] = true; flushDrafts(); renderResultados(); },
+        () => { renderResultados(); }
+    );
+}
+
+function showConfirmModal(message, onConfirm, onCancel) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+        '<div class="modal">' +
+        '<h3 style="font-size:0.95rem;">Confirmar cierre</h3>' +
+        '<p style="font-size:0.85rem;color:var(--on-surface-variant-70);margin-bottom:1rem;">' + esc(message) + '</p>' +
+        '<div class="btn-group" style="justify-content:flex-end;">' +
+        '<button class="btn btn-outline" id="btn-modal-cancel">Seguir editando</button>' +
+        '<button class="btn btn-primary" id="btn-modal-confirm">Confirmar</button>' +
+        '</div>' +
         '</div>';
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('btn-modal-cancel').addEventListener('click', () => { close(); if (onCancel) onCancel(); });
+    document.getElementById('btn-modal-confirm').addEventListener('click', () => { close(); if (onConfirm) onConfirm(); });
+}
 
-    // Set 1
-    html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 1</div>' +
-        '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;">' +
-        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + localColor + ';"></span> ' + esc(localName) + '</div>' +
-        '<input type="number" id="res-s1-local" min="0" max="7" value="' + s1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;">' +
-        '</div>' +
-        '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;">' +
-        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + visitColor + ';"></span> ' + esc(visitName) + '</div>' +
-        '<input type="number" id="res-s1-vis" min="0" max="7" value="' + s1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;">' +
+function confirmBorrarResultado(partidoId) {
+    const partido = resPartidos.find(p => p.id === partidoId);
+    if (!partido) return;
+    const catTxt = formatCategoria(partido.categoria) || 'este partido';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+        '<div class="modal">' +
+        '<h3 style="font-size:0.95rem;color:var(--error);"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">warning</span> Borrar resultado</h3>' +
+        '<p style="font-size:0.85rem;color:var(--on-surface-variant-70);margin-bottom:1rem;">Estás por borrar el resultado de <strong>' + esc(catTxt) + '</strong>.<br>Se eliminarán los scores, el ganador y los juegos del partido.<br>Los jugadores y la jornada NO se eliminan.</p>' +
+        '<div class="btn-group" style="justify-content:flex-end;">' +
+        '<button class="btn btn-outline" id="btn-borrar-cancel">Cancelar</button>' +
+        '<button class="btn btn-danger" id="btn-borrar-confirm"><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">delete</span> Sí, borrar</button>' +
         '</div>' +
         '</div>';
-
-    // Tie Break 1 (only if 4-4)
-    html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 1 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
-        '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.75rem;">' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-tb1-local" min="0" max="15" value="' + tb1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-tb1-vis" min="0" max="15" value="' + tb1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '</div>';
-
-    // Set 2
-    html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 2</div>' +
-        '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-s2-local" min="0" max="7" value="' + s2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;">' +
-        '</div>' +
-        '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-s2-vis" min="0" max="7" value="' + s2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;">' +
-        '</div>' +
-        '</div>';
-
-    // Tie Break 2 (only if 4-4)
-    html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 2 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
-        '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.75rem;">' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-tb2-local" min="0" max="15" value="' + tb2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-tb2-vis" min="0" max="15" value="' + tb2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '</div>';
-
-    // Super Tie Break (shown always but validated only when sets 1-1)
-    html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SUPER TIE BREAK <span style="font-weight:400;font-size:0.65rem;">(solo si sets 1-1)</span></div>' +
-        '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.75rem;">' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-stb-local" min="0" max="20" value="' + stbl + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;">' +
-        '<input type="number" id="res-stb-vis" min="0" max="20" value="' + stbv + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—">' +
-        '</div>' +
-        '</div>';
-
-    html += '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +
-        '<button class="btn btn-primary" id="btn-save-resultado"><span class="material-symbols-outlined" style="font-size:1rem;">save</span> Guardar Resultado</button>' +
-        '<button class="btn btn-outline" id="btn-cancel-resultado"><span class="material-symbols-outlined" style="font-size:1rem;">close</span> Cancelar</button>' +
-        '</div>' +
-        '</div>';
-
-    return html;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('btn-borrar-cancel').addEventListener('click', () => close());
+    document.getElementById('btn-borrar-confirm').addEventListener('click', () => { close(); safeAction(() => clearResultado(partidoId)); });
 }
 
 // ═══════════════════════════════════════════
@@ -2138,11 +3461,11 @@ async function loadAllEnfrentamientosAndPartidos() {
     try {
         for (const jornada of allJornadas) {
             const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos'));
-            const partidos = partSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const partidos = partSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
             allEnfrentamientosData.push({
                 id: jornada.id,
-                equipo_local_id: jornada.equipo_local_id,
-                equipo_visitante_id: jornada.equipo_visitante_id,
+                equipo_a_id: jornada.equipo_a_id,
+                equipo_b_id: jornada.equipo_b_id,
                 _jornadaId: jornada.id,
                 _jornadaNumero: jornada.numero,
                 partidos
@@ -2330,16 +3653,16 @@ function renderJornadas() {
         '<div class="form-group" style="flex:1;"><label>Fecha</label><input type="date" id="j-fecha" value="' + (jEdit && jEdit.fecha ? (jEdit.fecha.toDate ? jEdit.fecha.toDate().toISOString().split('T')[0] : new Date(jEdit.fecha).toISOString().split('T')[0]) : '') + '"></div>' +
         '</div>' +
         '<div class="form-row">' +
-        '<div class="form-group" style="flex:1;"><label>Equipo Local</label>' +
-        '<select id="j-equipo-local">' +
+        '<div class="form-group" style="flex:1;"><label>Equipo A</label>' +
+        '<select id="j-equipo-a">' +
         '<option value="">— Seleccionar —</option>' +
-        activeTeams.map(eq => '<option value="' + eq.id + '"' + (jEdit && jEdit.equipo_local_id === eq.id ? ' selected' : '') + '>' + esc(eq.nombre) + '</option>').join('') +
+        activeTeams.map(eq => '<option value="' + eq.id + '"' + (jEdit && jEdit.equipo_a_id === eq.id ? ' selected' : '') + '>' + esc(eq.nombre) + '</option>').join('') +
         '</select></div>' +
         '<div style="display:flex;align-items:end;padding-bottom:0.4rem;font-family:Lexend;font-weight:600;font-size:0.9rem;color:var(--on-surface-variant-40);">VS</div>' +
-        '<div class="form-group" style="flex:1;"><label>Equipo Visitante</label>' +
-        '<select id="j-equipo-visitante">' +
+        '<div class="form-group" style="flex:1;"><label>Equipo B</label>' +
+        '<select id="j-equipo-b">' +
         '<option value="">— Seleccionar —</option>' +
-        activeTeams.map(eq => '<option value="' + eq.id + '"' + (jEdit && jEdit.equipo_visitante_id === eq.id ? ' selected' : '') + '>' + esc(eq.nombre) + '</option>').join('') +
+        activeTeams.map(eq => '<option value="' + eq.id + '"' + (jEdit && jEdit.equipo_b_id === eq.id ? ' selected' : '') + '>' + esc(eq.nombre) + '</option>').join('') +
         '</select></div>' +
         '</div>' +
         '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +
@@ -2354,10 +3677,10 @@ function renderJornadas() {
         html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">calendar_today</span> Jornadas (' + allJornadas.length + ')</div>';
         html += allJornadas.map(j => {
             const fechaStr = getJornadaDateShort(j.fecha);
-            const localName = getTeamName(j.equipo_local_id) || j.equipo_local_nombre || '?';
-            const visitName = getTeamName(j.equipo_visitante_id) || j.equipo_visitante_nombre || '?';
-            const localColor = getTeamColor(j.equipo_local_id) || '#888';
-            const visitColor = getTeamColor(j.equipo_visitante_id) || '#888';
+            const teamAName = getTeamName(j.equipo_a_id) || j.equipo_a_nombre || '?';
+            const teamBName = getTeamName(j.equipo_b_id) || j.equipo_b_nombre || '?';
+            const teamAColor = getTeamColor(j.equipo_a_id) || '#888';
+            const teamBColor = getTeamColor(j.equipo_b_id) || '#888';
             return '<div class="card">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;">' +
             '<div style="flex:1;min-width:0;">' +
@@ -2367,11 +3690,11 @@ function renderJornadas() {
             '</div>' +
             '<div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;flex-wrap:wrap;">' +
             '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.8rem;">' +
-            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + localColor + ';"></span>' + esc(localName) +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamAColor + ';"></span>' + esc(teamAName) +
             '</span>' +
             '<span style="font-family:Lexend;font-weight:800;font-size:0.7rem;color:var(--on-surface-variant-40);">VS</span>' +
             '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.8rem;">' +
-            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + visitColor + ';"></span>' + esc(visitName) +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamBColor + ';"></span>' + esc(teamBName) +
             '</span>' +
             '</div>' +
             '</div>' +
@@ -2405,16 +3728,16 @@ function renderJornadas() {
 
 async function saveJornada() {
     const fecha = document.getElementById('j-fecha').value;
-    const localId = document.getElementById('j-equipo-local').value;
-    const visitanteId = document.getElementById('j-equipo-visitante').value;
+    const aId = document.getElementById('j-equipo-a').value;
+    const bId = document.getElementById('j-equipo-b').value;
 
     if (!fecha) { toast('Seleccioná una fecha', 'error'); return; }
-    if (!localId) { toast('Seleccioná el equipo local', 'error'); return; }
-    if (!visitanteId) { toast('Seleccioná el equipo visitante', 'error'); return; }
-    if (localId === visitanteId) { toast('Los equipos no pueden ser el mismo', 'error'); return; }
+    if (!aId) { toast('Seleccioná el equipo A', 'error'); return; }
+    if (!bId) { toast('Seleccioná el equipo B', 'error'); return; }
+    if (aId === bId) { toast('Los equipos no pueden ser el mismo', 'error'); return; }
 
-    const localName = getTeamName(localId);
-    const visitanteName = getTeamName(visitanteId);
+    const teamAName = getTeamName(aId);
+    const teamBName = getTeamName(bId);
     const fechaDate = new Date(fecha + 'T12:00:00');
 
     showLoading(editingJornadaId ? 'Actualizando jornada...' : 'Creando jornada...');
@@ -2422,10 +3745,10 @@ async function saveJornada() {
         if (editingJornadaId) {
             await updateDoc(docRef('jornadas', editingJornadaId), {
                 fecha: fechaDate,
-                equipo_local_id: localId,
-                equipo_visitante_id: visitanteId,
-                equipo_local_nombre: localName,
-                equipo_visitante_nombre: visitanteName
+                equipo_a_id: aId,
+                equipo_b_id: bId,
+                equipo_a_nombre: teamAName,
+                equipo_b_nombre: teamBName
             });
             toast('Jornada actualizada', 'success');
         } else {
@@ -2433,10 +3756,10 @@ async function saveJornada() {
             await addDoc(col('jornadas'), {
                 numero: nextNumero,
                 fecha: fechaDate,
-                equipo_local_id: localId,
-                equipo_visitante_id: visitanteId,
-                equipo_local_nombre: localName,
-                equipo_visitante_nombre: visitanteName
+                equipo_a_id: aId,
+                equipo_b_id: bId,
+                equipo_a_nombre: teamAName,
+                equipo_b_nombre: teamBName
             });
             toast('Jornada ' + nextNumero + ' creada', 'success');
         }
@@ -2508,10 +3831,10 @@ async function loadSemifinales() {
     try {
         const snap = await getDocs(semiCol());
         for (const docSnap of snap.docs) {
-            const semi = { id: docSnap.id, ...docSnap.data(), partidos: [] };
+            const semi = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(semiPartidoCol(semi.id));
             for (const p of partSnap.docs) {
-                semi.partidos.push({ id: p.id, ...p.data() });
+                semi.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
             }
             allSemifinales.push(semi);
         }
@@ -2525,7 +3848,7 @@ async function loadSemiPartidos(semiId) {
     if (!semiId) return;
     try {
         const snap = await getDocs(semiPartidoCol(semiId));
-        semiPartidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                semiPartidos = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
     } catch (e) {
         console.error('Error loading semi partidos:', e);
     }
@@ -2559,10 +3882,10 @@ async function generateSemifinales() {
                     jugador_b_1_id: null, jugador_b_2_id: null,
                     jugador_a_1_nombre: '', jugador_a_2_nombre: '',
                     jugador_b_1_nombre: '', jugador_b_2_nombre: '',
-                    set1_local: null, set1_visitante: null,
-                    set2_local: null, set2_visitante: null,
-                    supertiebreak_local: null, supertiebreak_visitante: null,
-                    games_local: 0, games_visitante: 0,
+                    set1_a: null, set1_b: null,
+                    set2_a: null, set2_b: null,
+                    supertiebreak_a: null, supertiebreak_b: null,
+                    games_a: 0, games_b: 0,
                     ganador_equipo_id: null, estado: 'pendiente'
                 });
             }
@@ -2634,27 +3957,27 @@ async function saveSemiResultado() {
     const partidoId = editingSemiPartidoId;
     if (!semiId || !partidoId) return;
 
-    const s1Local = document.getElementById('res-s1-local')?.value ?? '';
-    const s1Vis = document.getElementById('res-s1-vis')?.value ?? '';
-    const s2Local = document.getElementById('res-s2-local')?.value ?? '';
-    const s2Vis = document.getElementById('res-s2-vis')?.value ?? '';
-    const tb1Local = document.getElementById('res-tb1-local')?.value ?? '';
-    const tb1Vis = document.getElementById('res-tb1-vis')?.value ?? '';
-    const tb2Local = document.getElementById('res-tb2-local')?.value ?? '';
-    const tb2Vis = document.getElementById('res-tb2-vis')?.value ?? '';
-    const stbLocal = document.getElementById('res-stb-local')?.value ?? '';
-    const stbVis = document.getElementById('res-stb-vis')?.value ?? '';
+    const s1A = document.getElementById('res-s1-a')?.value ?? '';
+    const s1B = document.getElementById('res-s1-b')?.value ?? '';
+    const s2A = document.getElementById('res-s2-a')?.value ?? '';
+    const s2B = document.getElementById('res-s2-b')?.value ?? '';
+    const tb1A = document.getElementById('res-tb1-a')?.value ?? '';
+    const tb1B = document.getElementById('res-tb1-b')?.value ?? '';
+    const tb2A = document.getElementById('res-tb2-a')?.value ?? '';
+    const tb2B = document.getElementById('res-tb2-b')?.value ?? '';
+    const stbA = document.getElementById('res-stb-a')?.value ?? '';
+    const stbB = document.getElementById('res-stb-b')?.value ?? '';
 
-    if (!validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis)) return;
+    if (!validateMatchScore(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB)) return;
 
-    const s1l = parseInt(s1Local), s1v = parseInt(s1Vis);
-    const s2l = parseInt(s2Local), s2v = parseInt(s2Vis);
-    const tb1l = tb1Local !== '' ? parseInt(tb1Local) : null;
-    const tb1v = tb1Vis !== '' ? parseInt(tb1Vis) : null;
-    const tb2l = tb2Local !== '' ? parseInt(tb2Local) : null;
-    const tb2v = tb2Vis !== '' ? parseInt(tb2Vis) : null;
-    const stbl = stbLocal !== '' ? parseInt(stbLocal) : null;
-    const stbv = stbVis !== '' ? parseInt(stbVis) : null;
+    const s1l = parseInt(s1A), s1v = parseInt(s1B);
+    const s2l = parseInt(s2A), s2v = parseInt(s2B);
+    const tb1l = tb1A !== '' ? parseInt(tb1A) : null;
+    const tb1v = tb1B !== '' ? parseInt(tb1B) : null;
+    const tb2l = tb2A !== '' ? parseInt(tb2A) : null;
+    const tb2v = tb2B !== '' ? parseInt(tb2B) : null;
+    const stbl = stbA !== '' ? parseInt(stbA) : null;
+    const stbv = stbB !== '' ? parseInt(stbB) : null;
 
     const ganador = determineMatchWinner(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
     const games = calculateGames(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
@@ -2663,21 +3986,21 @@ async function saveSemiResultado() {
     const partido = semiPartidos.find(p => p.id === partidoId);
     if (!partido) return;
 
-    const ganadorEquipoId = ganador === 'local' ? semi.equipo_a_id :
-                            ganador === 'visitante' ? semi.equipo_b_id : null;
+    const ganadorEquipoId = ganador === 'a' ? semi.equipo_a_id :
+                            ganador === 'b' ? semi.equipo_b_id : null;
 
     showLoading('Guardando resultado...');
     try {
         await updateDoc(semiPartidoDocRef(semiId, partidoId), {
-            set1_local: s1l, set1_visitante: s1v,
-            set2_local: s2l, set2_visitante: s2v,
-            tiebreak1_local: tb1l, tiebreak1_visitante: tb1v,
-            tiebreak2_local: tb2l, tiebreak2_visitante: tb2v,
-            supertiebreak_local: stbl, supertiebreak_visitante: stbv,
+            set1_a: s1l, set1_b: s1v,
+            set2_a: s2l, set2_b: s2v,
+            tiebreak1_a: tb1l, tiebreak1_b: tb1v,
+            tiebreak2_a: tb2l, tiebreak2_b: tb2v,
+            supertiebreak_a: stbl, supertiebreak_b: stbv,
             ganador_equipo_id: ganadorEquipoId,
             estado: 'finalizado',
-            games_local: games.games_local,
-            games_visitante: games.games_visitante,
+            games_a: games.games_a,
+            games_b: games.games_b,
             fecha_resultado: new Date()
         });
         toast('Resultado guardado', 'success');
@@ -2705,14 +4028,14 @@ async function clearSemiResultado() {
     try {
         const semi = allSemifinales.find(s => s.id === semiId);
         await updateDoc(semiPartidoDocRef(semiId, partidoId), {
-            set1_local: null, set1_visitante: null,
-            set2_local: null, set2_visitante: null,
-            tiebreak1_local: null, tiebreak1_visitante: null,
-            tiebreak2_local: null, tiebreak2_visitante: null,
-            supertiebreak_local: null, supertiebreak_visitante: null,
+            set1_a: null, set1_b: null,
+            set2_a: null, set2_b: null,
+            tiebreak1_a: null, tiebreak1_b: null,
+            tiebreak2_a: null, tiebreak2_b: null,
+            supertiebreak_a: null, supertiebreak_b: null,
             ganador_equipo_id: null,
             estado: 'pendiente',
-            games_local: 0, games_visitante: 0,
+            games_a: 0, games_b: 0,
             fecha_resultado: null
         });
         if (semi && semi.ganador_equipo_id) {
@@ -2927,7 +4250,7 @@ function renderSemifinalDetail() {
             '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
             '<div style="flex:1;min-width:0;">' +
             '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(cat) + '</span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
             (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
             '</div>' +
             '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
@@ -2941,12 +4264,12 @@ function renderSemifinalDetail() {
             '</div>';
 
         if (isFinalizado) {
-            const s1 = partido.set1_local + '-' + partido.set1_visitante;
-            const s2 = partido.set2_local + '-' + partido.set2_visitante;
-            const tb1 = (partido.tiebreak1_local != null && partido.tiebreak1_visitante != null) ? ' · TB1 ' + partido.tiebreak1_local + '-' + partido.tiebreak1_visitante : '';
-            const tb2 = (partido.tiebreak2_local != null && partido.tiebreak2_visitante != null) ? ' · TB2 ' + partido.tiebreak2_local + '-' + partido.tiebreak2_visitante : '';
-            const hasSTB = partido.supertiebreak_local != null && partido.supertiebreak_visitante != null;
-            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_local + '-' + partido.supertiebreak_visitante : '';
+            const s1 = partido.set1_a + '-' + partido.set1_b;
+            const s2 = partido.set2_a + '-' + partido.set2_b;
+            const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
+            const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
+            const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
+            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
             const ganadorName = partido.ganador_equipo_id === semi.equipo_a_id ? semi.equipo_a_nombre : semi.equipo_b_nombre;
             html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
                 '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
@@ -3023,7 +4346,7 @@ function renderSemiPartidoForm(semi) {
 
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
-        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(part.categoria || '') +
+        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(formatCategoria(part.categoria || '')) +
         '</div>';
 
     html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
@@ -3054,54 +4377,54 @@ function renderSemiPartidoForm(semi) {
 function renderSemiResultadoForm(semi, part) {
     const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
     const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
-    const s1l = part.set1_local != null ? part.set1_local : '';
-    const s1v = part.set1_visitante != null ? part.set1_visitante : '';
-    const s2l = part.set2_local != null ? part.set2_local : '';
-    const s2v = part.set2_visitante != null ? part.set2_visitante : '';
-    const tb1l = part.tiebreak1_local != null ? part.tiebreak1_local : '';
-    const tb1v = part.tiebreak1_visitante != null ? part.tiebreak1_visitante : '';
-    const tb2l = part.tiebreak2_local != null ? part.tiebreak2_local : '';
-    const tb2v = part.tiebreak2_visitante != null ? part.tiebreak2_visitante : '';
-    const stbl = part.supertiebreak_local != null ? part.supertiebreak_local : '';
-    const stbv = part.supertiebreak_visitante != null ? part.supertiebreak_visitante : '';
+    const s1l = part.set1_a != null ? part.set1_a : '';
+    const s1v = part.set1_b != null ? part.set1_b : '';
+    const s2l = part.set2_a != null ? part.set2_a : '';
+    const s2v = part.set2_b != null ? part.set2_b : '';
+    const tb1l = part.tiebreak1_a != null ? part.tiebreak1_a : '';
+    const tb1v = part.tiebreak1_b != null ? part.tiebreak1_b : '';
+    const tb2l = part.tiebreak2_a != null ? part.tiebreak2_a : '';
+    const tb2v = part.tiebreak2_b != null ? part.tiebreak2_b : '';
+    const stbl = part.supertiebreak_a != null ? part.supertiebreak_a : '';
+    const stbv = part.supertiebreak_b != null ? part.supertiebreak_b : '';
 
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
         '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">sports_score</span> ' +
-        (part.estado === 'finalizado' ? 'Editar' : 'Ingresar') + ' Resultado — ' + esc(part.categoria || '') +
+        (part.estado === 'finalizado' ? 'Editar' : 'Ingresar') + ' Resultado — ' + esc(formatCategoria(part.categoria || '')) +
         '</div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 1</div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
         '<div style="flex:1;"><div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(semi.equipo_a_nombre) + '</div>' +
-        '<input type="number" id="res-s1-local" min="0" max="7" value="' + s1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
+        '<input type="number" id="res-s1-a" min="0" max="7" value="' + s1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
         '<div style="flex:1;"><div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span> ' + esc(semi.equipo_b_nombre) + '</div>' +
-        '<input type="number" id="res-s1-vis" min="0" max="7" value="' + s1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
+        '<input type="number" id="res-s1-b" min="0" max="7" value="' + s1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 1 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-tb1-local" min="0" max="15" value="' + tb1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-tb1-a" min="0" max="15" value="' + tb1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-tb1-vis" min="0" max="15" value="' + tb1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-tb1-b" min="0" max="15" value="' + tb1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 2</div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-s2-local" min="0" max="7" value="' + s2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-s2-a" min="0" max="7" value="' + s2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-s2-vis" min="0" max="7" value="' + s2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-s2-b" min="0" max="7" value="' + s2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 2 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-tb2-local" min="0" max="15" value="' + tb2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-tb2-a" min="0" max="15" value="' + tb2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-tb2-vis" min="0" max="15" value="' + tb2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-tb2-b" min="0" max="15" value="' + tb2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SUPER TIE BREAK <span style="font-weight:400;font-size:0.65rem;">(solo si sets 1-1)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.75rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-stb-local" min="0" max="20" value="' + stbl + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-stb-a" min="0" max="20" value="' + stbl + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-stb-vis" min="0" max="20" value="' + stbv + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-stb-b" min="0" max="20" value="' + stbv + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +
         '<button class="btn btn-primary" id="btn-save-semi-resultado"><span class="material-symbols-outlined" style="font-size:1rem;">save</span> Guardar Resultado</button>' +
@@ -3141,10 +4464,10 @@ async function loadFinales() {
     try {
         const snap = await getDocs(finalCol());
         for (const docSnap of snap.docs) {
-            const fin = { id: docSnap.id, ...docSnap.data(), partidos: [] };
+            const fin = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(finalPartidoCol(fin.id));
             for (const p of partSnap.docs) {
-                fin.partidos.push({ id: p.id, ...p.data() });
+                fin.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
             }
             allFinales.push(fin);
         }
@@ -3158,7 +4481,7 @@ async function loadFinalPartidos(finalId) {
     if (!finalId) return;
     try {
         const snap = await getDocs(finalPartidoCol(finalId));
-        finalPartidos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                finalPartidos = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
     } catch (e) {
         console.error('Error loading final partidos:', e);
     }
@@ -3194,10 +4517,10 @@ async function generateFinal() {
                 jugador_b_1_id: null, jugador_b_2_id: null,
                 jugador_a_1_nombre: '', jugador_a_2_nombre: '',
                 jugador_b_1_nombre: '', jugador_b_2_nombre: '',
-                set1_local: null, set1_visitante: null,
-                set2_local: null, set2_visitante: null,
-                supertiebreak_local: null, supertiebreak_visitante: null,
-                games_local: 0, games_visitante: 0,
+                set1_a: null, set1_b: null,
+                set2_a: null, set2_b: null,
+                supertiebreak_a: null, supertiebreak_b: null,
+                games_a: 0, games_b: 0,
                 ganador_equipo_id: null, estado: 'pendiente'
             });
         }
@@ -3265,27 +4588,27 @@ async function saveFinalResultado() {
     const partidoId = editingFinalPartidoId;
     if (!finalId || !partidoId) return;
 
-    const s1Local = document.getElementById('res-s1-local')?.value ?? '';
-    const s1Vis = document.getElementById('res-s1-vis')?.value ?? '';
-    const s2Local = document.getElementById('res-s2-local')?.value ?? '';
-    const s2Vis = document.getElementById('res-s2-vis')?.value ?? '';
-    const tb1Local = document.getElementById('res-tb1-local')?.value ?? '';
-    const tb1Vis = document.getElementById('res-tb1-vis')?.value ?? '';
-    const tb2Local = document.getElementById('res-tb2-local')?.value ?? '';
-    const tb2Vis = document.getElementById('res-tb2-vis')?.value ?? '';
-    const stbLocal = document.getElementById('res-stb-local')?.value ?? '';
-    const stbVis = document.getElementById('res-stb-vis')?.value ?? '';
+    const s1A = document.getElementById('res-s1-a')?.value ?? '';
+    const s1B = document.getElementById('res-s1-b')?.value ?? '';
+    const s2A = document.getElementById('res-s2-a')?.value ?? '';
+    const s2B = document.getElementById('res-s2-b')?.value ?? '';
+    const tb1A = document.getElementById('res-tb1-a')?.value ?? '';
+    const tb1B = document.getElementById('res-tb1-b')?.value ?? '';
+    const tb2A = document.getElementById('res-tb2-a')?.value ?? '';
+    const tb2B = document.getElementById('res-tb2-b')?.value ?? '';
+    const stbA = document.getElementById('res-stb-a')?.value ?? '';
+    const stbB = document.getElementById('res-stb-b')?.value ?? '';
 
-    if (!validateMatchScore(s1Local, s1Vis, s2Local, s2Vis, tb1Local, tb1Vis, tb2Local, tb2Vis, stbLocal, stbVis)) return;
+    if (!validateMatchScore(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB)) return;
 
-    const s1l = parseInt(s1Local), s1v = parseInt(s1Vis);
-    const s2l = parseInt(s2Local), s2v = parseInt(s2Vis);
-    const tb1l = tb1Local !== '' ? parseInt(tb1Local) : null;
-    const tb1v = tb1Vis !== '' ? parseInt(tb1Vis) : null;
-    const tb2l = tb2Local !== '' ? parseInt(tb2Local) : null;
-    const tb2v = tb2Vis !== '' ? parseInt(tb2Vis) : null;
-    const stbl = stbLocal !== '' ? parseInt(stbLocal) : null;
-    const stbv = stbVis !== '' ? parseInt(stbVis) : null;
+    const s1l = parseInt(s1A), s1v = parseInt(s1B);
+    const s2l = parseInt(s2A), s2v = parseInt(s2B);
+    const tb1l = tb1A !== '' ? parseInt(tb1A) : null;
+    const tb1v = tb1B !== '' ? parseInt(tb1B) : null;
+    const tb2l = tb2A !== '' ? parseInt(tb2A) : null;
+    const tb2v = tb2B !== '' ? parseInt(tb2B) : null;
+    const stbl = stbA !== '' ? parseInt(stbA) : null;
+    const stbv = stbB !== '' ? parseInt(stbB) : null;
 
     const ganador = determineMatchWinner(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
     const games = calculateGames(s1l, s1v, s2l, s2v, tb1l, tb1v, tb2l, tb2v, stbl, stbv);
@@ -3294,21 +4617,21 @@ async function saveFinalResultado() {
     const partido = finalPartidos.find(p => p.id === partidoId);
     if (!partido) return;
 
-    const ganadorEquipoId = ganador === 'local' ? fin.equipo_a_id :
-                            ganador === 'visitante' ? fin.equipo_b_id : null;
+    const ganadorEquipoId = ganador === 'a' ? fin.equipo_a_id :
+                            ganador === 'b' ? fin.equipo_b_id : null;
 
     showLoading('Guardando resultado...');
     try {
         await updateDoc(finalPartidoDocRef(finalId, partidoId), {
-            set1_local: s1l, set1_visitante: s1v,
-            set2_local: s2l, set2_visitante: s2v,
-            tiebreak1_local: tb1l, tiebreak1_visitante: tb1v,
-            tiebreak2_local: tb2l, tiebreak2_visitante: tb2v,
-            supertiebreak_local: stbl, supertiebreak_visitante: stbv,
+            set1_a: s1l, set1_b: s1v,
+            set2_a: s2l, set2_b: s2v,
+            tiebreak1_a: tb1l, tiebreak1_b: tb1v,
+            tiebreak2_a: tb2l, tiebreak2_b: tb2v,
+            supertiebreak_a: stbl, supertiebreak_b: stbv,
             ganador_equipo_id: ganadorEquipoId,
             estado: 'finalizado',
-            games_local: games.games_local,
-            games_visitante: games.games_visitante,
+            games_a: games.games_a,
+            games_b: games.games_b,
             fecha_resultado: new Date()
         });
         toast('Resultado guardado', 'success');
@@ -3336,14 +4659,14 @@ async function clearFinalResultado() {
     try {
         const fin = allFinales.find(f => f.id === finalId);
         await updateDoc(finalPartidoDocRef(finalId, partidoId), {
-            set1_local: null, set1_visitante: null,
-            set2_local: null, set2_visitante: null,
-            tiebreak1_local: null, tiebreak1_visitante: null,
-            tiebreak2_local: null, tiebreak2_visitante: null,
-            supertiebreak_local: null, supertiebreak_visitante: null,
+            set1_a: null, set1_b: null,
+            set2_a: null, set2_b: null,
+            tiebreak1_a: null, tiebreak1_b: null,
+            tiebreak2_a: null, tiebreak2_b: null,
+            supertiebreak_a: null, supertiebreak_b: null,
             ganador_equipo_id: null,
             estado: 'pendiente',
-            games_local: 0, games_visitante: 0,
+            games_a: 0, games_b: 0,
             fecha_resultado: null
         });
         if (fin && fin.ganador_equipo_id) {
@@ -3557,7 +4880,7 @@ function renderFinalDetail() {
             '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
             '<div style="flex:1;min-width:0;">' +
             '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(cat) + '</span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
             (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
             '</div>' +
             '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
@@ -3571,12 +4894,12 @@ function renderFinalDetail() {
             '</div>';
 
         if (isFinalizado) {
-            const s1 = partido.set1_local + '-' + partido.set1_visitante;
-            const s2 = partido.set2_local + '-' + partido.set2_visitante;
-            const tb1 = (partido.tiebreak1_local != null && partido.tiebreak1_visitante != null) ? ' · TB1 ' + partido.tiebreak1_local + '-' + partido.tiebreak1_visitante : '';
-            const tb2 = (partido.tiebreak2_local != null && partido.tiebreak2_visitante != null) ? ' · TB2 ' + partido.tiebreak2_local + '-' + partido.tiebreak2_visitante : '';
-            const hasSTB = partido.supertiebreak_local != null && partido.supertiebreak_visitante != null;
-            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_local + '-' + partido.supertiebreak_visitante : '';
+            const s1 = partido.set1_a + '-' + partido.set1_b;
+            const s2 = partido.set2_a + '-' + partido.set2_b;
+            const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
+            const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
+            const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
+            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
             const ganadorName = partido.ganador_equipo_id === fin.equipo_a_id ? fin.equipo_a_nombre : fin.equipo_b_nombre;
             html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
                 '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
@@ -3653,7 +4976,7 @@ function renderFinalPartidoForm(fin) {
 
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
-        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(part.categoria || '') +
+        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(formatCategoria(part.categoria || '')) +
         '</div>';
 
     html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
@@ -3684,54 +5007,54 @@ function renderFinalPartidoForm(fin) {
 function renderFinalResultadoForm(fin, part) {
     const aColor = fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#888';
     const bColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888';
-    const s1l = part.set1_local != null ? part.set1_local : '';
-    const s1v = part.set1_visitante != null ? part.set1_visitante : '';
-    const s2l = part.set2_local != null ? part.set2_local : '';
-    const s2v = part.set2_visitante != null ? part.set2_visitante : '';
-    const tb1l = part.tiebreak1_local != null ? part.tiebreak1_local : '';
-    const tb1v = part.tiebreak1_visitante != null ? part.tiebreak1_visitante : '';
-    const tb2l = part.tiebreak2_local != null ? part.tiebreak2_local : '';
-    const tb2v = part.tiebreak2_visitante != null ? part.tiebreak2_visitante : '';
-    const stbl = part.supertiebreak_local != null ? part.supertiebreak_local : '';
-    const stbv = part.supertiebreak_visitante != null ? part.supertiebreak_visitante : '';
+    const s1l = part.set1_a != null ? part.set1_a : '';
+    const s1v = part.set1_b != null ? part.set1_b : '';
+    const s2l = part.set2_a != null ? part.set2_a : '';
+    const s2v = part.set2_b != null ? part.set2_b : '';
+    const tb1l = part.tiebreak1_a != null ? part.tiebreak1_a : '';
+    const tb1v = part.tiebreak1_b != null ? part.tiebreak1_b : '';
+    const tb2l = part.tiebreak2_a != null ? part.tiebreak2_a : '';
+    const tb2v = part.tiebreak2_b != null ? part.tiebreak2_b : '';
+    const stbl = part.supertiebreak_a != null ? part.supertiebreak_a : '';
+    const stbv = part.supertiebreak_b != null ? part.supertiebreak_b : '';
 
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
         '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">sports_score</span> ' +
-        (part.estado === 'finalizado' ? 'Editar' : 'Ingresar') + ' Resultado — ' + esc(part.categoria || '') +
+        (part.estado === 'finalizado' ? 'Editar' : 'Ingresar') + ' Resultado — ' + esc(formatCategoria(part.categoria || '')) +
         '</div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 1</div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
         '<div style="flex:1;"><div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(fin.equipo_a_nombre) + '</div>' +
-        '<input type="number" id="res-s1-local" min="0" max="7" value="' + s1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
+        '<input type="number" id="res-s1-a" min="0" max="7" value="' + s1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
         '<div style="flex:1;"><div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span> ' + esc(fin.equipo_b_nombre) + '</div>' +
-        '<input type="number" id="res-s1-vis" min="0" max="7" value="' + s1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
+        '<input type="number" id="res-s1-b" min="0" max="7" value="' + s1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 1 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-tb1-local" min="0" max="15" value="' + tb1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-tb1-a" min="0" max="15" value="' + tb1l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-tb1-vis" min="0" max="15" value="' + tb1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-tb1-b" min="0" max="15" value="' + tb1v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SET 2</div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-s2-local" min="0" max="7" value="' + s2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-s2-a" min="0" max="7" value="' + s2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-s2-vis" min="0" max="7" value="' + s2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-s2-b" min="0" max="7" value="' + s2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--primary);margin-bottom:0.4rem;">TIE BREAK SET 2 <span style="font-weight:400;font-size:0.65rem;">(solo si 4-4)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-tb2-local" min="0" max="15" value="' + tb2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-tb2-a" min="0" max="15" value="' + tb2l + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-tb2-vis" min="0" max="15" value="' + tb2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-tb2-b" min="0" max="15" value="' + tb2v + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">SUPER TIE BREAK <span style="font-weight:400;font-size:0.65rem;">(solo si sets 1-1)</span></div>' +
         '<div style="display:flex;gap:0.5rem;align-items:end;margin-bottom:0.75rem;">' +
-        '<div style="flex:1;"><input type="number" id="res-stb-local" min="0" max="20" value="' + stbl + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
+        '<div style="flex:1;"><input type="number" id="res-stb-a" min="0" max="20" value="' + stbl + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div>' +
         '<div style="font-family:Lexend;font-weight:800;color:var(--on-surface-variant-40);padding-bottom:0.5rem;">—</div>' +
-        '<div style="flex:1;"><input type="number" id="res-stb-vis" min="0" max="20" value="' + stbv + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
+        '<div style="flex:1;"><input type="number" id="res-stb-b" min="0" max="20" value="' + stbv + '" style="width:100%;text-align:center;font-size:1.1rem;font-weight:600;padding:0.5rem;" placeholder="—"></div></div>';
 
     html += '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +
         '<button class="btn btn-primary" id="btn-save-final-resultado"><span class="material-symbols-outlined" style="font-size:1rem;">save</span> Guardar Resultado</button>' +

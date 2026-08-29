@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Migración: local/visitante → a/b</title>
+    <style>
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 2rem; }
+        h1 { color: #00d4aa; }
+        .log { background: #0f0f23; padding: 1rem; border-radius: 8px; margin-top: 1rem; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; }
+        .ok { color: #00d4aa; }
+        .err { color: #ff6b6b; }
+        .info { color: #74b9ff; }
+        button { background: #00d4aa; color: #000; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 1rem; font-size: 1rem; }
+        button:hover { background: #00b894; }
+        button:disabled { background: #555; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <h1>Migración Firestore: local/visitante → a/b</h1>
+    <p>Este script migra los campos de los documentos existentes en Firestore:<br>
+    <code>equipo_local_id → equipo_a_id</code>, <code>equipo_visitante_id → equipo_b_id</code>, etc.</p>
+    <p class="info">Ejecutá una sola vez. Los documentos ya migrados serán saltados.</p>
+    <button id="btn-migrate" onclick="runMigration()">Ejecutar Migración</button>
+    <div id="log" class="log"></div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+        import { getFirestore, collection, getDocs, doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDXFRqwIvL2GYRC24abE-ovTxepCsX8p1o",
+            authDomain: "tucanapp-pos.firebaseapp.com",
+            projectId: "tucanapp-pos",
+            storageBucket: "tucanapp-pos.firebasestorage.app",
+            messagingSenderId: "833846886165",
+            appId: "1:833846886165:web:28746819de42fbddd1331c"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const logEl = document.getElementById('log');
+        function log(msg, cls = '') {
+            const span = document.createElement('span');
+            span.className = cls;
+            span.textContent = msg + '\n';
+            logEl.appendChild(span);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Field mappings for different collections
+        const JORNADA_FIELDS = {
+            equipo_local_id: 'equipo_a_id',
+            equipo_visitante_id: 'equipo_b_id',
+            equipo_local_nombre: 'equipo_a_nombre',
+            equipo_visitante_nombre: 'equipo_b_nombre'
+        };
+
+        const PARTIDO_FIELDS = {
+            equipo_local_id: 'equipo_a_id',
+            equipo_visitante_id: 'equipo_b_id',
+            equipo_local_nombre: 'equipo_a_nombre',
+            equipo_visitante_nombre: 'equipo_b_nombre',
+            jugador_local_1_id: 'jugador_a_1_id',
+            jugador_local_2_id: 'jugador_a_2_id',
+            jugador_visitante_1_id: 'jugador_b_1_id',
+            jugador_visitante_2_id: 'jugador_b_2_id',
+            jugador_local_1_nombre: 'jugador_a_1_nombre',
+            jugador_local_2_nombre: 'jugador_a_2_nombre',
+            jugador_visitante_1_nombre: 'jugador_b_1_nombre',
+            jugador_visitante_2_nombre: 'jugador_b_2_nombre',
+            set1_local: 'set1_a',
+            set1_visitante: 'set1_b',
+            set2_local: 'set2_a',
+            set2_visitante: 'set2_b',
+            tiebreak1_local: 'tiebreak1_a',
+            tiebreak1_visitante: 'tiebreak1_b',
+            tiebreak2_local: 'tiebreak2_a',
+            tiebreak2_visitante: 'tiebreak2_b',
+            supertiebreak_local: 'supertiebreak_a',
+            supertiebreak_visitante: 'supertiebreak_b',
+            games_local: 'games_a',
+            games_visitante: 'games_b'
+        };
+
+        function migrateDocData(data, fieldMap) {
+            const updates = {};
+            let count = 0;
+            for (const [oldKey, newKey] of Object.entries(fieldMap)) {
+                if (oldKey in data && !(newKey in data)) {
+                    updates[newKey] = data[oldKey];
+                    count++;
+                }
+            }
+            return { updates, count };
+        }
+
+        async function migrateCollection(torneoRef, collName, fieldMap) {
+            const snap = await getDocs(collection(db, 'torneos', torneoRef.id, collName));
+            let migrated = 0;
+            let skipped = 0;
+            for (const d of snap.docs) {
+                const { updates, count } = migrateDocData(d.data(), fieldMap);
+                if (count > 0) {
+                    await updateDoc(doc(db, 'torneos', torneoRef.id, collName, d.id), updates);
+                    migrated++;
+                    log(`  ✓ ${d.id} (${count} campos)`, 'ok');
+                } else {
+                    skipped++;
+                }
+            }
+            return { migrated, skipped };
+        }
+
+        async function migrateEnfrentamientos(torneoId) {
+            // Get all jornadas
+            const jornSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas'));
+            let totalMigrated = 0;
+            let totalSkipped = 0;
+
+            for (const jornDoc of jornSnap.docs) {
+                // Migrate enfrentamientos subcollection
+                const enfSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos'));
+                for (const enfDoc of enfSnap.docs) {
+                    const { updates, count } = migrateDocData(enfDoc.data(), JORNADA_FIELDS);
+                    if (count > 0) {
+                        await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id), updates);
+                        totalMigrated++;
+                        log(`  ✓ enf ${enfDoc.id} (${count} campos)`, 'ok');
+                    } else {
+                        totalSkipped++;
+                    }
+
+                    // Migrate partidos subcollection under enfrentamientos
+                    const partSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos'));
+                    for (const partDoc of partSnap.docs) {
+                        const { updates, count } = migrateDocData(partDoc.data(), PARTIDO_FIELDS);
+                        if (count > 0) {
+                            await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos', partDoc.id), updates);
+                            totalMigrated++;
+                            log(`  ✓ part ${partDoc.id} (${count} campos)`, 'ok');
+                        } else {
+                            totalSkipped++;
+                        }
+                    }
+                }
+
+                // Migrate partidos directly under jornadas
+                const partSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'partidos'));
+                for (const partDoc of partSnap.docs) {
+                    const { updates, count } = migrateDocData(partDoc.data(), PARTIDO_FIELDS);
+                    if (count > 0) {
+                        await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'partidos', partDoc.id), updates);
+                        totalMigrated++;
+                        log(`  ✓ part-directo ${partDoc.id} (${count} campos)`, 'ok');
+                    } else {
+                        totalSkipped++;
+                    }
+                }
+            }
+            return { migrated: totalMigrated, skipped: totalSkipped };
+        }
+
+        window.runMigration = async function() {
+            const btn = document.getElementById('btn-migrate');
+            btn.disabled = true;
+            btn.textContent = 'Migrando...';
+            log('=== Iniciando migración ===', 'info');
+
+            try {
+                const torneosSnap = await getDocs(collection(db, 'torneos'));
+                const torneos = torneosSnap.docs.filter(d => d.id !== 'config');
+
+                log(`Torneos encontrados: ${torneos.length}`, 'info');
+
+                for (const torneoDoc of torneos) {
+                    const torneo = torneoDoc.data();
+                    log(`\n--- Torneo: ${torneo.name || torneoDoc.id} ---`, 'info');
+
+                    // 1. Migrate jornadas
+                    log('Migrando jornadas...', 'info');
+                    const jRes = await migrateCollection({ id: torneoDoc.id }, 'jornadas', JORNADA_FIELDS);
+                    log(`  Jornadas: ${jRes.migrated} migradas, ${jRes.skipped} saltadas`);
+
+                    // 2. Migrate enfrentamientos and partidos (nested)
+                    log('Migrando enfrentamientos y partidos...', 'info');
+                    const eRes = await migrateEnfrentamientos(torneoDoc.id);
+                    log(`  Enfrentamientos+Partidos: ${eRes.migrated} migrados, ${eRes.skipped} saltados`);
+                }
+
+                log('\n=== Migración completada ===', 'ok');
+                btn.textContent = 'Completado ✓';
+            } catch (e) {
+                log('ERROR: ' + e.message, 'err');
+                console.error(e);
+                btn.disabled = false;
+                btn.textContent = 'Reintentar';
+            }
+        };
+    </script>
+</body>
+</html>

@@ -26,6 +26,10 @@ export function col(name) {
     return collection(db, 'torneos', _activeTournamentId, name);
 }
 
+export function finanzasCol() {
+    return collection(db, 'torneos', _activeTournamentId, 'finanzas');
+}
+
 export function docRef(name, id) {
     return doc(db, 'torneos', _activeTournamentId, name, id);
 }

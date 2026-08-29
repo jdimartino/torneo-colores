@@ -37,6 +37,11 @@ service cloud.firestore {
         allow write: if isAdmin();
       }
 
+      match /jornadas/{jornadaId}/partidos/{partidoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
       match /jornadas/{jornadaId}/enfrentamientos/{enfId}/partidos/{partidoId} {
         allow read: if true;
         allow write: if isAdmin();
@@ -58,6 +63,16 @@ service cloud.firestore {
       }
 
       match /finales/{finalId}/partidos/{partidoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /finanzas/{movimientoId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      match /configuracion/{docId} {
         allow read: if true;
         allow write: if isAdmin();
       }

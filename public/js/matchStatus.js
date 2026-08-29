@@ -20,7 +20,7 @@ export function getEnfrentamientoEstado(enf) {
 // Excluye equipos que descansan
 export function getJornadaEstado(jornada, enfs) {
     const enfsNoDescanso = (enfs || []).filter(e =>
-        e.equipo_local_id && e.equipo_visitante_id
+        e.equipo_a_id && e.equipo_b_id
     );
     if (enfsNoDescanso.length === 0) return 'pendiente';
     const allComplete = enfsNoDescanso.every(e => getEnfrentamientoEstado(e) === 'finalizado');

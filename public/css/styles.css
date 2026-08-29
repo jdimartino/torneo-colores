@@ -257,12 +257,16 @@ body.admin-body { max-width: 600px; }
   display: flex;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   gap: 4px;
   scrollbar-width: none;
   scroll-behavior: smooth;
-  padding: 0.5rem 0;
+  padding: 0.5rem 2.5rem;
   width: 100%;
+  cursor: grab;
 }
+
+.tab-nav:active { cursor: grabbing; }
 
 .tab-nav::-webkit-scrollbar { display: none; }
 
@@ -288,6 +292,27 @@ body.admin-body { max-width: 600px; }
 }
 
 .tab-scroll-btn.hidden { opacity: 0; pointer-events: none; }
+
+.tab-scroll-left {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--bg);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  z-index: 5;
+  flex-shrink: 0;
+  transition: opacity 0.2s ease;
+}
 
 .tab-nav button {
   flex-shrink: 0;
@@ -341,6 +366,33 @@ body.admin-body { max-width: 600px; }
   margin-bottom: 0.75rem;
   box-shadow: var(--shadow-card);
 }
+
+.finance-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--white-5);
+}
+.finance-item:last-child { border-bottom: none; }
+.finance-concepto { font-weight: 600; font-size: 0.85rem; color: var(--on-surface); }
+.finance-meta { font-size: 0.72rem; color: var(--on-surface-variant); margin-top: 0.15rem; }
+.finance-monto { font-weight: 700; font-size: 0.95rem; }
+.finance-monto.ingreso { color: var(--primary); }
+.finance-monto.egreso { color: var(--error); }
+.btn-icon {
+  background: transparent;
+  border: none;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon:hover { background: var(--white-5); color: var(--error); }
 
  .card h3 {
   font-family: 'Lexend', sans-serif;
@@ -1451,6 +1503,433 @@ td.col-player { text-align: left; }
   text-align: left;
 }
 
+/* Resultados eliminatoria - unidades editables */
+.res-team-header {
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--white-5);
+  margin-bottom: 0.25rem;
+}
+.res-team-header .match-pair-name {
+  font-size: 0.8rem;
+  color: var(--on-surface);
+}
+.res-unit {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: var(--radius-md);
+  margin-bottom: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--white-5);
+  background: var(--surface-low);
+}
+.res-unit-active {
+  border-color: var(--primary);
+  background: rgba(63, 255, 139, 0.06);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.res-unit-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'Lexend', sans-serif;
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--on-surface-variant-70);
+  padding-bottom: 0.2rem;
+}
+.res-unit .match-pair-row {
+  gap: 0.5rem;
+}
+.res-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 0.6rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.res-badge-ok {
+  background: var(--primary);
+  color: #041329;
+}
+.res-badge-warn {
+  background: var(--secondary);
+  color: #3a2a00;
+}
+.res-side-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 0.65rem;
+  flex-shrink: 0;
+}
+.res-side-tag.team-blue { background: rgba(77, 166, 255, 0.15); color: var(--team); }
+.res-side-tag.team-gold { background: rgba(254, 179, 0, 0.15); color: var(--secondary); }
+.res-unit-score {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 1.15rem;
+  min-width: 2rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+.res-unit-score.team-blue { color: var(--team); }
+.res-unit-score.team-gold { color: var(--secondary); }
+.res-unit-score.state-win { color: var(--primary); }
+.res-unit-score.state-lose { color: var(--error); }
+.res-unit-score.state-tie { color: var(--secondary); }
+.res-sep {
+  color: var(--on-surface-variant-40);
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+#panel-resultados .res-unit .score-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 1rem;
+}
+
+/* Resultados - switch de vista Inicio/Jornada */
+.res-view-bar {
+  display: flex;
+  margin-bottom: 0.75rem;
+}
+.res-view-switch {
+  display: inline-flex;
+  background: var(--surface-low);
+  border: 1px solid var(--white-10);
+  border-radius: var(--radius-md);
+  padding: 0.2rem;
+  gap: 0.2rem;
+  width: 100%;
+}
+.res-view-btn {
+  flex: 1;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--on-surface-variant-70);
+  font-family: 'Lexend', sans-serif;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.res-view-btn.active {
+  background: var(--primary);
+  color: #041329;
+}
+.res-view-btn:not(.active):hover {
+  background: var(--white-5);
+  color: var(--on-surface);
+}
+
+/* Resultados - grupos por jornada */
+.res-jornada-group {
+  margin-bottom: 1rem;
+}
+.res-jornada-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'Lexend', sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--primary);
+  margin: 0.25rem 0 0.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--white-5);
+}
+
+/* Resultados - cards en curso / finalizados */
+.res-card-open {
+  border-left: 4px solid var(--primary);
+}
+.res-card-dim {
+  opacity: 0.55;
+  border-left: 4px solid var(--on-surface-variant-40);
+}
+.res-card-dim:hover {
+  opacity: 0.9;
+}
+.res-card-dim .score-btn {
+  pointer-events: auto;
+}
+.res-card .btn-group-spaced.btn-group-inline {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--white-5);
+}
+
+/* Resultados - card compacta de partido finalizado */
+.res-card-compact {
+  padding: 0.6rem 0.7rem;
+}
+.res-card-compact .res-compact-row {
+  padding: 0.12rem 0;
+  gap: 0.5rem;
+}
+.res-card-compact .match-pair-name {
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.res-card-compact .match-pair-score {
+  font-size: 0.82rem;
+  font-weight: 800;
+  min-width: 0;
+  white-space: nowrap;
+}
+.res-card-compact .match-meta {
+  font-size: 0.62rem;
+  margin-top: 0.2rem;
+  padding-top: 0.2rem;
+}
+
+/* ═══════════════════════════════════════════
+   SCOREBOARD PÚBLICO (vista jugadores)
+   ═══════════════════════════════════════════ */
+.res-public-wrap {
+  background: #0a1628;
+  padding: 1rem;
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+.res-public-card {
+  background: #132238;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+.res-public-header {
+  background: linear-gradient(90deg, #1e3a5f 0%, #0f2540 100%);
+  color: #4da6ff;
+  font-family: 'Lexend', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid #1e3a5f;
+}
+.res-public-player {
+  display: flex;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgba(30, 58, 95, 0.5);
+}
+.res-public-player > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.res-public-player > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.res-public-score {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: 'Lexend', sans-serif;
+  font-weight: 900;
+  font-size: 1.75rem;
+  color: #ffffff;
+  letter-spacing: 0.15em;
+  line-height: 1;
+  text-align: right;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.res-public-winner {
+  color: #3fff8b;
+  text-shadow: 0 0 10px rgba(63, 255, 139, 0.4);
+}
+
+/* Color por unidad ganada/perdida (set · tie · super tie) */
+.res-set {
+  display: inline-block;
+  min-width: 1.5rem;
+  text-align: center;
+  margin: 0;
+}
+.res-set-win {
+  color: #3fff8b;
+  text-shadow: 0 0 10px rgba(63, 255, 139, 0.4);
+}
+.res-set-lose {
+  color: #ff5a5a;
+}
+.res-set-tie {
+  color: #ccd6e0;
+  text-shadow: none;
+}
+
+/* Partidos en curso - badge + card */
+.res-public-card-live {
+  border-color: #3fff8b;
+  box-shadow: 0 0 14px rgba(63, 255, 139, 0.18);
+}
+.res-live-badge {
+  color: #3fff8b;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  margin-left: 0.25rem;
+}
+.res-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fff8b;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+  animation: resPulse 1.2s ease-in-out infinite;
+}
+@keyframes resPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.res-final-badge {
+  color: #8899aa;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  margin-left: 0.25rem;
+}
+.res-final-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8899aa;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+.res-meta-category {
+  color: var(--accent-purple);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.res-meta-date {
+  color: var(--on-surface-variant-60);
+}
+.res-meta-jornada {
+  color: var(--on-surface-variant-60);
+  font-weight: 600;
+}
+.res-meta-phase {
+  color: var(--primary);
+  font-weight: 600;
+}
+.res-winner-declaration {
+  color: var(--on-surface);
+  font-size: 0.95rem;
+  margin: 0.5rem 0;
+  display: flex;
+  gap: 0.35rem;
+}
+.res-winner-declaration .res-winner-label {
+  color: var(--success-green);
+  font-weight: 600;
+}
+.res-winner-declaration .res-winner-name {
+  color: var(--success-green);
+  font-weight: 700;
+}
+.btn-compact {
+  padding: 0.2rem 0.5rem !important;
+  height: 1.5rem !important;
+  font-size: 0.7rem !important;
+  line-height: 1.1 !important;
+  min-width: auto !important;
+  gap: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-compact .material-symbols-outlined {
+  font-size: 0.65rem !important;
+}
+.btn-compact.btn-primary {
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+}
+.btn-compact.btn-danger,
+.btn-compact.btn-outline {
+  padding-left: 0.4rem !important;
+  padding-right: 0.4rem !important;
+}
+.btn-compact.btn-icon {
+  padding: 0.2rem 0.4rem !important;
+  aspect-ratio: 1 / 1;
+}
+.btn-group-spaced.btn-group-inline {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.match-category-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Scoreboard en admin (partidos finalizados) */
+.res-final-admin {
+  border: 1px solid rgba(77, 166, 255, 0.4);
+}
+.res-final-admin .res-public-header {
+  color: #ffffff;
+}
+.res-final-admin .btn-group-spaced {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid #1e3a5f;
+  padding: 0.35rem 0.6rem;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .res-public-card {
+    border-radius: 4px;
+  }
+  .res-public-player {
+    padding: 0.5rem 0.6rem;
+    gap: 0.5rem;
+  }
+  .res-public-name {
+    font-size: 0.9rem;
+  }
+  .res-public-score {
+    font-size: 1.4rem;
+    min-width: 3rem;
+  }
+  .res-public-header {
+    font-size: 0.62rem;
+    padding: 0.35rem 0.6rem;
+  }
+}
+
 .search-input {
   width: 100%;
   padding: 0.6rem 0.8rem;
@@ -1634,7 +2113,8 @@ td.col-player { text-align: left; }
     flex-shrink: 0;
     white-space: nowrap;
   }
-  .tab-scroll-btn {
+  .tab-scroll-btn,
+  .tab-scroll-left {
     display: none !important; /* Native scrolling is better on mobile */
   }
 
@@ -1664,6 +2144,18 @@ td.col-player { text-align: left; }
   }
   .btn-group-spaced .btn {
     width: 100%;
+  }
+
+  /* Resultados: mantener botones compactos en línea aunque no entren */
+  #panel-resultados .btn-group-spaced,
+  #panel-resultados .btn-group-spaced.btn-group-inline {
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  #panel-resultados .btn-group-spaced .btn {
+    width: auto !important;
+    flex: 0 1 auto;
   }
 
   /* Table responsive - horizontal scroll */
@@ -1705,6 +2197,23 @@ td.col-player { text-align: left; }
     display: none;
   }
 
+  /* Resultados - mantener layout horizontal en móvil */
+  #panel-resultados .match-pair-row {
+    flex-wrap: nowrap !important;
+  }
+  #panel-resultados .match-pair-name {
+    flex: 1 1 auto !important;
+  }
+  #panel-resultados .res-team-header .match-pair-name:first-child { text-align: left !important; }
+  #panel-resultados .res-team-header .match-pair-name:last-child { text-align: right !important; }
+  #panel-resultados .match-pair-score {
+    flex: 0 0 auto !important;
+    text-align: right !important;
+  }
+  #panel-resultados .match-pair-divider {
+    display: block !important;
+  }
+
   /* Header - compact */
   .header-top {
     flex-wrap: wrap;
@@ -1731,7 +2240,7 @@ td.col-player { text-align: left; }
 
 /* Print styles */
 @media print {
-  .tab-nav, .btn, .admin-link, .tournament-bar, .btn-group-spaced {
+  .tab-nav, .btn, .admin-link, .tournament-bar, .btn-group-spaced, .tab-scroll-left {
     display: none !important;
   }
   .tab-content {
@@ -1782,4 +2291,538 @@ td.col-player { text-align: left; }
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--white-5);
+}
+
+/* ═══════════════════════════════════════════
+   FINANCE MODULE — ADMINISTRACIÓN
+   ═══════════════════════════════════════════ */
+
+/* Summary Grid */
+.finance-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 480px) {
+  .finance-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.finance-summary-card {
+  background: var(--surface-high);
+  border: 1px solid var(--white-5);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem;
+  box-shadow: var(--shadow-card);
+}
+
+.finance-summary-card.empty {
+  opacity: 0.5;
+}
+
+.fsc-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+}
+
+.fsc-currency {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 1.2rem;
+  color: var(--primary);
+}
+
+.fsc-label {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fsc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  padding: 0.2rem 0;
+  color: var(--on-surface-variant);
+}
+
+.fsc-row span:last-child {
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.fsc-row .egreso {
+  color: var(--error);
+}
+
+.fsc-divider {
+  height: 1px;
+  background: var(--white-5);
+  margin: 0.3rem 0;
+}
+
+.fsc-balance {
+  font-weight: 700;
+  padding-top: 0.25rem;
+}
+
+.fsc-balance span:last-child {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: var(--primary);
+}
+
+.fsc-empty {
+  font-size: 0.72rem;
+  color: var(--on-surface-variant-40);
+  text-align: center;
+  padding: 0.5rem 0;
+}
+
+/* Actions */
+.finance-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.finance-actions .btn {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  padding: 0.55rem 0.6rem;
+}
+
+@media (max-width: 480px) {
+  .finance-actions {
+    flex-direction: column;
+  }
+  .finance-actions .btn {
+    width: 100%;
+  }
+}
+
+/* Filters */
+.finance-filters {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.finance-filter-pill {
+  background: var(--white-5);
+  border: 1px solid var(--white-5);
+  color: var(--on-surface-variant);
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-xl);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'Inter', sans-serif;
+  transition: all 0.2s ease;
+}
+
+.finance-filter-pill.active {
+  background: var(--primary);
+  color: var(--bg);
+  border-color: var(--primary);
+}
+
+.finance-filter-pill:active {
+  transform: scale(0.96);
+}
+
+/* Movements List */
+.finance-movements {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.finance-movement-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: var(--surface-high);
+  border: 1px solid var(--white-5);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+  box-shadow: var(--shadow-card);
+}
+
+.fmr-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.fmr-concepto {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fmr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  color: var(--on-surface-variant-60);
+  align-items: center;
+}
+
+.fmr-fecha {
+  color: var(--on-surface-variant-40);
+}
+
+.fmr-badge {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.fmr-badge.ingreso {
+  background: rgba(63, 255, 139, 0.12);
+  color: var(--primary);
+}
+
+.fmr-badge.egreso {
+  background: rgba(255, 84, 73, 0.12);
+  color: var(--error);
+}
+
+.fmr-moneda {
+  font-weight: 600;
+  color: var(--on-surface-variant);
+}
+
+.fmr-obs {
+  color: var(--on-surface-variant-40);
+  font-style: italic;
+}
+
+.fmr-jugador {
+  color: var(--on-surface-variant-30);
+}
+
+.fmr-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.fmr-monto {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.fmr-monto.ingreso {
+  color: var(--primary);
+}
+
+.fmr-monto.egreso {
+  color: var(--error);
+}
+
+.fmr-actions {
+  display: flex;
+  gap: 0.15rem;
+}
+
+/* Empty State */
+.finance-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--on-surface-variant-40);
+}
+
+.finance-empty .material-symbols-outlined {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--on-surface-variant-30);
+}
+
+.finance-empty p {
+  font-size: 0.82rem;
+}
+
+/* ═══════════════════════════════════════════
+   BCV RATES — TASAS DE REFERENCIA
+   ═══════════════════════════════════════════ */
+
+.finance-rates-card {
+  background: var(--surface-high);
+  border: 1px solid var(--white-5);
+  border-radius: var(--radius-lg);
+  padding: 0.4rem;
+  margin-bottom: 0.4rem;
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+
+.frc-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  margin-bottom: 0.3rem;
+}
+
+.frc-title {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 600;
+  font-size: 0.7rem;
+  color: var(--on-surface-variant);
+}
+
+.frc-rates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.frc-rate-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+}
+
+.frc-cur {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 800;
+  font-size: 0.65rem;
+  color: var(--primary);
+  min-width: 1.8rem;
+}
+
+.frc-val {
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.frc-updated {
+  font-size: 0.6rem;
+  color: var(--on-surface-variant-40);
+  margin-top: 0.2rem;
+}
+
+.frc-warning {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  font-size: 0.6rem;
+  color: var(--secondary);
+  margin-top: 0.2rem;
+  padding: 0.2rem 0.3rem;
+  background: rgba(254, 179, 0, 0.08);
+  border-radius: var(--radius-sm);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Finance summary new */.finance-summary-new {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.finance-section {
+  background: var(--surface-high);
+  border: 1px solid var(--white-5);
+  border-radius: var(--radius-lg);
+  padding: 0.75rem 0.9rem;
+  box-shadow: var(--shadow-card);
+}
+
+.fs-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.fs-icon {
+  font-size: 1.05rem;
+  color: var(--primary);
+}
+
+.fs-title {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fs-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--white-5);
+}
+
+.fs-row:last-child {
+  border-bottom: none;
+}
+
+.fs-label {
+  color: var(--on-surface-variant);
+  font-weight: 500;
+}
+
+.fs-label.fs-muted,
+.fs-value.fs-muted {
+  color: var(--on-surface-variant-40);
+}
+
+.fs-value {
+  font-family: 'Lexend', sans-serif;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.fs-value.ingreso {
+  color: var(--primary);
+}
+
+.fs-value.egreso {
+  color: var(--error);
+}
+
+.fs-value.equiv {
+  color: var(--team);
+}
+
+.fs-value.total {
+  color: var(--secondary);
+  font-size: 0.85rem;
+}
+
+.fs-divider {
+  height: 1px;
+  background: var(--white-10);
+  margin: 0.35rem 0;
+}
+
+.finance-section .fsc-empty {
+  text-align: center;
+  color: var(--on-surface-variant-40);
+  font-size: 0.78rem;
+  padding: 0.5rem 0;
+}
+
+/* Balance section */
+.finance-balance-section {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  text-align: center;
+  padding: 0.85rem;
+  background: var(--surface-high);
+  border: 1px solid var(--white-5);
+  border-radius: var(--radius-lg);
+  margin-bottom: 0.75rem;
+  box-shadow: var(--shadow-card);
+}
+
+.balance-item {
+  flex: 1;
+  text-align: center;
+}
+
+.balance-label {
+  font-family: 'Lexend', sans-serif;
+  font-size: 0.7rem;
+  color: var(--on-surface-variant);
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.balance-value {
+  font-family: 'Lexend', sans-serif;
+  font-size: 1rem;
+  font-weight: 800;
+  display: block;
+  line-height: 1.2;
+  letter-spacing: 0.2px;
+}
+
+.balance-positive {
+  color: var(--primary);
+}
+
+.balance-negative {
+  color: var(--error);
+}
+
+.balance-zero {
+  color: var(--on-surface-variant-40);
+}
+
+/* Modal equivalence */
+.fm-equivalente {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--secondary);
+  padding: 0.35rem 0.6rem;
+  background: rgba(254, 179, 0, 0.08);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.65rem;
+}
+
+/* Summary card equivalence */
+.fsc-equivalent {
+  font-size: 0.7rem;
+  color: var(--on-surface-variant-40);
+  text-align: right;
+  padding: 0.15rem 0 0;
+  font-style: italic;
+}
+
+/* Movement row equivalence */
+.fmr-equivalente {
+  font-size: 0.68rem;
+  color: var(--on-surface-variant-40);
+  text-align: right;
+  font-style: italic;
+  margin-top: 0.1rem;
+}
+
+/* Modal overlay active state */
+.modal-overlay.active {
+  display: flex;
 }

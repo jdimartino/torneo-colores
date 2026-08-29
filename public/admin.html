@@ -11,7 +11,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <link rel="stylesheet" href="css/styles.css?v=1">
+    <meta http-equiv="Cache-Control" content="max-age=0">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304132b'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial,sans-serif' font-weight='bold' font-size='16' fill='%233fff8b'%3ETC%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="css/styles.css?v=15">
 </head>
 <body class="admin-body">
 
@@ -69,6 +71,9 @@
                 </div>
                 <div class="header-line"></div>
                 <div class="tab-nav-wrap">
+                <button class="tab-scroll-btn tab-scroll-left hidden" aria-label="Anterior">
+                    <span class="material-symbols-outlined">chevron_left</span>
+                </button>
                 <nav class="tab-nav">
                     <button class="admin-tab-btn active" data-panel="jugadores" onclick="showPanel('jugadores')">
                         <span class="material-symbols-outlined" style="font-size:1rem;">groups</span> Jugadores
@@ -97,6 +102,9 @@
                     <button class="admin-tab-btn" data-panel="torneos" onclick="showPanel('torneos')">
                         <span class="material-symbols-outlined" style="font-size:1rem;">settings</span> Torneos
                     </button>
+                    <button class="admin-tab-btn" data-panel="administracion" onclick="showPanel('administracion')">
+                        <span class="material-symbols-outlined" style="font-size:1rem;">account_balance_wallet</span> Administración
+                    </button>
                 </nav>
                 <button class="tab-scroll-btn" aria-label="Más pestañas">
                     <span class="material-symbols-outlined">chevron_right</span>
@@ -113,14 +121,33 @@
             <div id="panel-semifinales" class="admin-panel"></div>
             <div id="panel-final" class="admin-panel"></div>
             <div id="panel-torneos" class="admin-panel"></div>
+            <div id="panel-administracion" class="admin-panel"></div>
         </div>
     </main>
+
+    <div class="modal-overlay" id="finance-modal-overlay" style="display:none;">
+        <div class="modal">
+            <h3>Otro Ingreso</h3>
+            <div class="form-row">
+                <div class="form-group"><label>Fecha</label><input type="date" id="fm-fecha"></div>
+                <div class="form-group"><label>Moneda</label><select id="fm-moneda"><option value="EUR">EUR</option><option value="USD">USD</option><option value="Bs">Bs</option></select></div>
+            </div>
+            <div class="form-group"><label>Concepto</label><input type="text" id="fm-concepto" placeholder="Ej: Patrocinio"></div>
+            <div class="form-group"><label>Monto</label><input type="number" id="fm-monto" placeholder="0" step="0.01" min="0.01"></div>
+            <div class="fm-equivalente" id="fm-equivalente" style="display:none;"></div>
+            <div class="form-group"><label>Observación</label><input type="text" id="fm-observacion" placeholder="Opcional"></div>
+            <div class="btn-group" style="justify-content:flex-end;">
+                <button class="btn btn-outline" onclick="closeFinanceModal()"><span class="material-symbols-outlined" style="font-size:1rem;">close</span> Cancelar</button>
+                <button class="btn btn-primary" id="fm-btn-save" onclick="saveFinanceModal()"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Guardar</button>
+            </div>
+        </div>
+    </div>
 
     <footer class="app-footer">
         <p>Desarrollado por JDM Services Systems</p>
     </footer>
 
-    <script type="module" src="js/admin.js?v=1"></script>
+    <script type="module" src="js/admin.js?v=14"></script>
 
 </body>
 </html>

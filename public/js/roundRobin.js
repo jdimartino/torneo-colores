@@ -30,10 +30,10 @@ export function generateRoundRobin(teams) {
             const b = circle[numTeams - 1 - i];
             if (a === -1 || b === -1) continue; // skip BYE matches
             round.push({
-                equipo_local_id: active[a].id,
-                equipo_visitante_id: active[b].id,
-                equipo_local_nombre: active[a].nombre,
-                equipo_visitante_nombre: active[b].nombre
+                equipo_a_id: active[a].id,
+                equipo_b_id: active[b].id,
+                equipo_a_nombre: active[a].nombre,
+                equipo_b_nombre: active[b].nombre
             });
         }
         rounds.push(round);
@@ -48,11 +48,11 @@ export function generateRoundRobin(teams) {
     rounds.forEach((round, roundIdx) => {
         round.forEach(m => {
             enfrentamientos.push({
-                id: 'enf_' + m.equipo_local_id + '_' + m.equipo_visitante_id + '_' + roundIdx + '_' + enfId++,
-                equipo_local_id: m.equipo_local_id,
-                equipo_visitante_id: m.equipo_visitante_id,
-                equipo_local_nombre: m.equipo_local_nombre,
-                equipo_visitante_nombre: m.equipo_visitante_nombre,
+                id: 'enf_' + m.equipo_a_id + '_' + m.equipo_b_id + '_' + roundIdx + '_' + enfId++,
+                equipo_a_id: m.equipo_a_id,
+                equipo_b_id: m.equipo_b_id,
+                equipo_a_nombre: m.equipo_a_nombre,
+                equipo_b_nombre: m.equipo_b_nombre,
                 jornada_numero: roundIdx + 1,
                 estado: 'pendiente'
             });
@@ -114,7 +114,7 @@ function validateSchedule(teams, rounds, enfrentamientos) {
     });
 
     enfrentamientos.forEach(e => {
-        const pair = [e.equipo_local_id, e.equipo_visitante_id].sort().join('-');
+        const pair = [e.equipo_a_id, e.equipo_b_id].sort().join('-');
         if (pairs.has(pair)) {
             errors.push('Par duplicado: ' + pair);
         }
@@ -122,17 +122,17 @@ function validateSchedule(teams, rounds, enfrentamientos) {
 
         // Check team plays at most once per jornada
         const jn = e.jornada_numero;
-        if (teamByJornada[e.equipo_local_id]?.has(jn)) {
-            errors.push(e.equipo_local_id + ' juega dos veces en jornada ' + jn);
+        if (teamByJornada[e.equipo_a_id]?.has(jn)) {
+            errors.push(e.equipo_a_id + ' juega dos veces en jornada ' + jn);
         }
-        if (teamByJornada[e.equipo_visitante_id]?.has(jn)) {
-            errors.push(e.equipo_visitante_id + ' juega dos veces en jornada ' + jn);
+        if (teamByJornada[e.equipo_b_id]?.has(jn)) {
+            errors.push(e.equipo_b_id + ' juega dos veces en jornada ' + jn);
         }
-        teamByJornada[e.equipo_local_id]?.add(jn);
-        teamByJornada[e.equipo_visitante_id]?.add(jn);
+        teamByJornada[e.equipo_a_id]?.add(jn);
+        teamByJornada[e.equipo_b_id]?.add(jn);
 
-        teamMatches[e.equipo_local_id]++;
-        teamMatches[e.equipo_visitante_id]++;
+        teamMatches[e.equipo_a_id]++;
+        teamMatches[e.equipo_b_id]++;
     });
 
     // C) Each pair appears exactly once
@@ -142,8 +142,8 @@ function validateSchedule(teams, rounds, enfrentamientos) {
 
     // D) No team plays itself
     enfrentamientos.forEach(e => {
-        if (e.equipo_local_id === e.equipo_visitante_id) {
-            errors.push('Equipo juega contra sí mismo: ' + e.equipo_local_id);
+        if (e.equipo_a_id === e.equipo_b_id) {
+            errors.push('Equipo juega contra sí mismo: ' + e.equipo_a_id);
         }
     });
 

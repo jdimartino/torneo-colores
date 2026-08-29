@@ -1,12 +1,12 @@
-import { getDocs, collection, query, where } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+import { getDocs, collection, query, where, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { db } from './firebase.js';
 import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
-import { esc, shortName, formatDate, makeTeamHelpers } from './utils.js';
+import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers } from './utils.js';
 
 let allJugadores = [];
 let allEquipos = [];
-let allPartidos = [];
+let allPartidosEliminatoria = [];
 let allJornadas = [];
 let allEnfrentamientos = [];
 let allSemifinales = [];
@@ -16,6 +16,44 @@ const _teamHelpers = makeTeamHelpers(() => allEquipos);
 const getTeamName = _teamHelpers.getTeamName;
 const getTeamColor = _teamHelpers.getTeamColor;
 
+// ── Backward compatibility: normalize old local/visitante fields to a/b ──
+function normalizeFields(data) {
+    if (!data) return data;
+    const d = { ...data };
+    const map = {
+        equipo_local_id: 'equipo_a_id',
+        equipo_visitante_id: 'equipo_b_id',
+        equipo_local_nombre: 'equipo_a_nombre',
+        equipo_visitante_nombre: 'equipo_b_nombre',
+        jugador_local_1_id: 'jugador_a_1_id',
+        jugador_local_2_id: 'jugador_a_2_id',
+        jugador_visitante_1_id: 'jugador_b_1_id',
+        jugador_visitante_2_id: 'jugador_b_2_id',
+        jugador_local_1_nombre: 'jugador_a_1_nombre',
+        jugador_local_2_nombre: 'jugador_a_2_nombre',
+        jugador_visitante_1_nombre: 'jugador_b_1_nombre',
+        jugador_visitante_2_nombre: 'jugador_b_2_nombre',
+        set1_local: 'set1_a',
+        set1_visitante: 'set1_b',
+        set2_local: 'set2_a',
+        set2_visitante: 'set2_b',
+        tiebreak1_local: 'tiebreak1_a',
+        tiebreak1_visitante: 'tiebreak1_b',
+        tiebreak2_local: 'tiebreak2_a',
+        tiebreak2_visitante: 'tiebreak2_b',
+        supertiebreak_local: 'supertiebreak_a',
+        supertiebreak_visitante: 'supertiebreak_b',
+        games_local: 'games_a',
+        games_visitante: 'games_b'
+    };
+    for (const [oldKey, newKey] of Object.entries(map)) {
+        if (oldKey in d && !(newKey in d)) {
+            d[newKey] = d[oldKey];
+        }
+    }
+    return d;
+}
+
 const loadingHTML = '<div class="panel-loading"><div class="tennis-ball-spinner"></div><div class="loading-text">Cargando datos del torneo...</div></div>';
 
 function getJugadorNombre(jugId) {
@@ -24,7 +62,103 @@ function getJugadorNombre(jugId) {
     return j ? ((j.nombre || '').split(' ')[0] + ' ' + (j.apellidos || '').split(' ')[0]) : '';
 }
 
+// ── Scoreboard helpers (tenis real) ──
+// Devuelve un token por unidad: { text, win, tie } donde win=true fue ganador de ESA unidad.
+function setUnitTokens(setA, setB, tbA, tbB) {
+    if (setA === 4 && setB === 4 && tbA != null && tbB != null) {
+        return {
+            a: { text: '5(' + tbA + ')', win: tbA > tbB, tie: tbA === tbB },
+            b: { text: '5(' + tbB + ')', win: tbB > tbA, tie: tbA === tbB }
+        };
+    }
+    return {
+        a: { text: String(setA), win: setA > setB, tie: setA === setB },
+        b: { text: String(setB), win: setB > setA, tie: setA === setB }
+    };
+}
+
+function formatPlayerScore(rs) {
+    const s1 = setUnitTokens(rs.set1_a, rs.set1_b, rs.tb1_a, rs.tb1_b);
+    const s2 = setUnitTokens(rs.set2_a, rs.set2_b, rs.tb2_a, rs.tb2_b);
+    const tokens = { a: [s1.a, s2.a], b: [s1.b, s2.b] };
+    if (rs.stb_a != null && rs.stb_b != null) {
+        tokens.a.push({ text: String(rs.stb_a), win: rs.stb_a > rs.stb_b, tie: rs.stb_a === rs.stb_b });
+        tokens.b.push({ text: String(rs.stb_b), win: rs.stb_b > rs.stb_a, tie: rs.stb_a === rs.stb_b });
+    }
+    return tokens;
+}
+
+function renderScoreTokens(tokens) {
+    return tokens.map(t =>
+        '<span class="res-set' + (t.tie ? ' res-set-tie' : (t.win ? ' res-set-win' : ' res-set-lose')) + '">' + esc(t.text) + '</span>'
+    ).join('');
+}
+
+// Objeto rs según el estado: finalizado lee campos directos; pendiente lee borrador.
+function getPublicRs(p) {
+    if (p.estado === 'finalizado') {
+        return {
+            set1_a: p.set1_a != null ? p.set1_a : 0,
+            set1_b: p.set1_b != null ? p.set1_b : 0,
+            set2_a: p.set2_a != null ? p.set2_a : 0,
+            set2_b: p.set2_b != null ? p.set2_b : 0,
+            tb1_a: p.tiebreak1_a != null ? p.tiebreak1_a : null,
+            tb1_b: p.tiebreak1_b != null ? p.tiebreak1_b : null,
+            tb2_a: p.tiebreak2_a != null ? p.tiebreak2_a : null,
+            tb2_b: p.tiebreak2_b != null ? p.tiebreak2_b : null,
+            stb_a: p.supertiebreak_a != null ? p.supertiebreak_a : null,
+            stb_b: p.supertiebreak_b != null ? p.supertiebreak_b : null
+        };
+    }
+    const d = p.borrador || {};
+    return {
+        set1_a: d.set1_a != null ? d.set1_a : 0,
+        set1_b: d.set1_b != null ? d.set1_b : 0,
+        set2_a: d.set2_a != null ? d.set2_a : 0,
+        set2_b: d.set2_b != null ? d.set2_b : 0,
+        tb1_a: d.tb1_a != null ? d.tb1_a : null,
+        tb1_b: d.tb1_b != null ? d.tb1_b : null,
+        tb2_a: d.tb2_a != null ? d.tb2_a : null,
+        tb2_b: d.tb2_b != null ? d.tb2_b : null,
+        stb_a: d.stb_a != null ? d.stb_a : null,
+        stb_b: d.stb_b != null ? d.stb_b : null
+    };
+}
+
 let _dataLoaded = false;
+let _resUnsubscribers = [];
+
+function unsubscribeResultadosLive() {
+    _resUnsubscribers.forEach(u => { try { u(); } catch (e) {} });
+    _resUnsubscribers = [];
+}
+
+// Live listeners sobre jornadas/{id}/partidos (los que carga el admin en Resultados)
+function setupResultadosLive() {
+    unsubscribeResultadosLive();
+    if (!getActiveTournamentId()) return;
+    for (const jornada of allJornadas) {
+        const col = collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos');
+        const unsub = onSnapshot(col, (snap) => {
+            // Reconstruir los partidos de esta jornada en allPartidosEliminatoria
+            allPartidosEliminatoria = allPartidosEliminatoria.filter(p => p._jornadaId !== jornada.id);
+            snap.docs.forEach(d => {
+                const p = { id: d.id, ...normalizeFields(d.data()) };
+                p._jornadaId = jornada.id;
+                p._jornadaNumero = jornada.numero;
+                p._jornadaFecha = jornada.fecha;
+                allPartidosEliminatoria.push(p);
+            });
+            // Si el tab Resultados está activo, re-renderizar en vivo
+            const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
+            if (activeTab === 'resultados') renderResultados();
+        }, (err) => {
+            console.error('Error en listener de resultados:', err);
+        });
+        _resUnsubscribers.push(unsub);
+    }
+}
+
 async function loadAllData() {
     if (_dataLoaded) return;
     await loadTournamentConfig();
@@ -35,36 +169,38 @@ async function loadAllData() {
             getDocs(col('equipos')),
             getDocs(col('jornadas'))
         ]);
-        allJugadores = jugSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        allEquipos = equipSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        allJornadas = jornSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        allJugadores = jugSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        allEquipos = equipSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        allJornadas = jornSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
 
-        // Load partidos and enfrentamientos from nested structure
-        allPartidos = [];
+        // Load partidos by category (the ones the admin writes/scores) and build
+        // enfrentamientos por jornada (misma fuente que el admin para posiciones)
         allEnfrentamientos = [];
+        allPartidosEliminatoria = [];
         for (const jornada of allJornadas) {
-            const enfSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'enfrentamientos'));
-            for (const enf of enfSnap.docs) {
-                const enfData = { id: enf.id, ...enf.data(), _jornadaId: jornada.id, _jornadaNumero: jornada.numero, partidos: [] };
-                const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'enfrentamientos', enf.id, 'partidos'));
-                for (const part of partSnap.docs) {
-                    const partidoData = {
-                        id: part.id,
-                        _jornadaId: jornada.id,
-                        _jornadaNumero: jornada.numero,
-                        _jornadaFecha: jornada.fecha,
-                        _enfrentamientoId: enf.id,
-                        ...part.data()
-                    };
-                    allPartidos.push(partidoData);
-                    enfData.partidos.push(partidoData);
-                }
-                allEnfrentamientos.push(enfData);
-            }
+            const directSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos'));
+            const directPartidos = [];
+            directSnap.docs.forEach(d => {
+                const p = { id: d.id, ...normalizeFields(d.data()) };
+                p._jornadaId = jornada.id;
+                p._jornadaNumero = jornada.numero;
+                p._jornadaFecha = jornada.fecha;
+                directPartidos.push(p);
+                allPartidosEliminatoria.push(p);
+            });
+            allEnfrentamientos.push({
+                id: jornada.id,
+                equipo_a_id: jornada.equipo_a_id,
+                equipo_b_id: jornada.equipo_b_id,
+                _jornadaId: jornada.id,
+                _jornadaNumero: jornada.numero,
+                partidos: directPartidos
+            });
         }
     } catch (e) {
         console.error('Error loading data:', e);
     }
+    setupResultadosLive();
     _dataLoaded = true;
 }
 
@@ -182,19 +318,19 @@ function renderPosiciones() {
     el.innerHTML = html;
 }
 
-// ── Resultados ──
+// ── Resultados (scoreboard público) ──
 function renderResultados() {
     const el = document.getElementById('resultados');
-    const partidosFinalizados = allPartidos.filter(p => p.estado === 'finalizado');
+    const partidos = allPartidosEliminatoria;
 
-    if (!partidosFinalizados.length) {
-        el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">sports_tennis</span><p>Aún no hay resultados registrados</p></div>';
+    if (!partidos.length) {
+        el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">sports_tennis</span><p>Aún no hay partidos cargados</p></div>';
         return;
     }
 
     // Group by jornada
     const jornadasMap = {};
-    partidosFinalizados.forEach(p => {
+    partidos.forEach(p => {
         const key = p._jornadaId || 'unknown';
         if (!jornadasMap[key]) {
             jornadasMap[key] = {
@@ -206,7 +342,6 @@ function renderResultados() {
         jornadasMap[key].partidos.push(p);
     });
 
-    // Sort jornadas by numero
     const sortedJornadas = Object.entries(jornadasMap).sort((a, b) => {
         return (a[1].numero || 0) - (b[1].numero || 0);
     });
@@ -214,50 +349,60 @@ function renderResultados() {
     let html = '<input type="text" id="result-search-public" class="search-input" placeholder="Buscar por nombre de jugador...">';
 
     sortedJornadas.forEach(([jId, jornada]) => {
-        html += '<div style="font-family:Lexend;font-weight:600;font-size:0.9rem;margin:1rem 0 0.5rem;color:var(--primary);">' +
-            '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">event</span> Jornada ' + esc(String(jornada.numero)) +
-            '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);font-weight:400;margin-left:0.4rem;">' + esc(formatDate(jornada.fecha)) + '</span>' +
-            '</div>';
+        const jornadaName = 'Jornada ' + esc(String(jornada.numero));
+        const fechaStr = formatDate(jornada.fecha) || '';
 
-        jornada.partidos.forEach(p => {
-            const s1l = p.set1_local != null ? p.set1_local : 0;
-            const s1v = p.set1_visitante != null ? p.set1_visitante : 0;
-            const s2l = p.set2_local != null ? p.set2_local : 0;
-            const s2v = p.set2_visitante != null ? p.set2_visitante : 0;
-            const stbl = p.supertiebreak_local != null ? p.supertiebreak_local : null;
-            const stbv = p.supertiebreak_visitante != null ? p.supertiebreak_visitante : null;
+        // En curso primero, finalizados después
+        const sorted = jornada.partidos.slice().sort((a, b) => {
+            const sa = a.estado === 'finalizado' ? 1 : 0;
+            const sb = b.estado === 'finalizado' ? 1 : 0;
+            return sa - sb;
+        });
 
-            const localName = p.equipo_local_nombre || getTeamName(p.equipo_local_id) || '—';
-            const visitName = p.equipo_visitante_nombre || getTeamName(p.equipo_visitante_id) || '—';
-            const localColor = getTeamColor(p.equipo_local_id);
-            const visitColor = getTeamColor(p.equipo_visitante_id);
+        sorted.forEach(p => {
+            const rs = getPublicRs(p);
+            const scores = formatPlayerScore(rs);
+            const aColor = getTeamColor(p.equipo_a_id) || 'var(--team)';
+            const bColor = getTeamColor(p.equipo_b_id) || 'var(--secondary)';
 
-            const ganadorId = p.ganador_equipo_id;
-            const localWins = ganadorId === p.equipo_local_id;
-            const visitWins = ganadorId === p.equipo_visitante_id;
+            const j1 = getJugadorNombre(p.jugador_a_1_id);
+            const j2 = getJugadorNombre(p.jugador_a_2_id);
+            const j3 = getJugadorNombre(p.jugador_b_1_id);
+            const j4 = getJugadorNombre(p.jugador_b_2_id);
+            const aNames = (j1 && j2) ? (j1 + ' / ' + j2) : (p.equipo_a_nombre || '—');
+            const bNames = (j3 && j4) ? (j3 + ' / ' + j4) : (p.equipo_b_nombre || '—');
 
-            const c1 = localWins ? 'state-win' : (visitWins ? 'state-lose' : 'state-tie');
-            const c2 = visitWins ? 'state-win' : (localWins ? 'state-lose' : 'state-tie');
+            const rankA = p.numero_socio_a || '—';
+            const rankB = p.numero_socio_b || '—';
 
-            // Player names
-            const j1 = getJugadorNombre(p.jugador_local_1_id);
-            const j2 = getJugadorNombre(p.jugador_local_2_id);
-            const j3 = getJugadorNombre(p.jugador_visitante_1_id);
-            const j4 = getJugadorNombre(p.jugador_visitante_2_id);
+            const catLabel = formatCategoria(p.categoria || 'PARTIDO');
+            const live = p.estado !== 'finalizado';
+            const liveBadge = live
+                ? ' <span class="res-live-badge"><span class="res-live-dot"></span>EN CURSO</span>'
+                : ' <span class="res-final-badge"><span class="res-final-dot"></span>FINALIZADO</span>';
 
-            html += '<div class="resultado-card">' +
-                '<div style="font-size:0.65rem;color:var(--on-surface-variant-40);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:0.3rem;">' + esc(p.categoria || '') + '</div>' +
-                '<div class="match-pair-row">' +
-                '<div class="match-pair-name team-blue ' + c1 + '"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + localColor + ';margin-right:0.3rem;vertical-align:middle;"></span>' + esc(localName) + '</div>' +
-                '<div class="match-pair-score team-blue ' + c1 + '">' + s1l + ' · ' + s2l + (stbl != null ? ' · ' + stbl : '') + '</div>' +
+            const headerParts = [];
+            if (fechaStr) headerParts.push('<span class="res-meta-date">' + esc(fechaStr) + '</span>');
+            headerParts.push('<span class="res-meta-jornada">' + esc(jornadaName) + '</span>');
+            headerParts.push('<span class="res-meta-category">' + esc(catLabel) + '</span>');
+
+            html += '<div class="res-public-card' + (live ? ' res-public-card-live' : '') + '">' +
+                '<div class="res-public-header">' + headerParts.join(' · ') + liveBadge + '</div>' +
+                '<div class="res-public-player">' +
+                '<div class="res-public-dot" style="background:' + aColor + ';"></div>' +
+                '<div>' +
+                '<div class="res-public-name">' + esc(aNames) + '</div>' +
+                '<div class="res-public-rank">(' + esc(rankA) + ')</div>' +
                 '</div>' +
-                '<div class="match-pair-divider"></div>' +
-                '<div class="match-pair-row">' +
-                '<div class="match-pair-name team-gold ' + c2 + '"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + visitColor + ';margin-right:0.3rem;vertical-align:middle;"></span>' + esc(visitName) + '</div>' +
-                '<div class="match-pair-score team-gold ' + c2 + '">' + s1v + ' · ' + s2v + (stbv != null ? ' · ' + stbv : '') + '</div>' +
+                '<div class="res-public-score">' + renderScoreTokens(scores.a) + '</div>' +
                 '</div>' +
-                '<div class="r-meta">' +
-                '<span class="r-fecha">' + esc(j1 && j2 ? j1 + ' / ' + j2 : '') + ' vs ' + esc(j3 && j4 ? j3 + ' / ' + j4 : '') + '</span>' +
+                '<div class="res-public-player">' +
+                '<div class="res-public-dot" style="background:' + bColor + ';"></div>' +
+                '<div>' +
+                '<div class="res-public-name">' + esc(bNames) + '</div>' +
+                '<div class="res-public-rank">(' + esc(rankB) + ')</div>' +
+                '</div>' +
+                '<div class="res-public-score">' + renderScoreTokens(scores.b) + '</div>' +
                 '</div>' +
                 '</div>';
         });
@@ -269,7 +414,7 @@ function renderResultados() {
     if (resultSearch) {
         resultSearch.addEventListener('input', () => {
             const term = resultSearch.value.toLowerCase();
-            document.querySelectorAll('.resultado-card').forEach(card => {
+            document.querySelectorAll('.res-public-card').forEach(card => {
                 card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
             });
         });
@@ -502,10 +647,10 @@ async function loadSemifinalesPublic() {
     try {
         const snap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'semifinales'));
         for (const docSnap of snap.docs) {
-            const semi = { id: docSnap.id, ...docSnap.data(), partidos: [] };
+            const semi = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'semifinales', semi.id, 'partidos'));
             for (const p of partSnap.docs) {
-                semi.partidos.push({ id: p.id, ...p.data() });
+                semi.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
             }
             allSemifinales.push(semi);
         }
@@ -520,10 +665,10 @@ async function loadFinalesPublic() {
     try {
         const snap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'finales'));
         for (const docSnap of snap.docs) {
-            const fin = { id: docSnap.id, ...docSnap.data(), partidos: [] };
+            const fin = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'finales', fin.id, 'partidos'));
             for (const p of partSnap.docs) {
-                fin.partidos.push({ id: p.id, ...p.data() });
+                fin.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
             }
             allFinales.push(fin);
         }
@@ -586,17 +731,17 @@ function renderSemifinalesPublic() {
 
             // Show match results
             semi.partidos.filter(p => p.estado === 'finalizado').forEach(p => {
-                const localIsA = p.ganador_equipo_id === semi.equipo_a_id;
-                const winnerColor = localIsA ? aColor : bColor;
-                const s1 = (p.set1_local || 0) + '-' + (p.set1_visitante || 0);
-                const s2 = (p.set2_local || 0) + '-' + (p.set2_visitante || 0);
-                const hasSTB = p.supertiebreak_local != null;
-                const stb = hasSTB ? ' · STB ' + (p.supertiebreak_local || 0) + '-' + (p.supertiebreak_visitante || 0) : '';
+                const isA = p.ganador_equipo_id === semi.equipo_a_id;
+                const winnerColor = isA ? aColor : bColor;
+                const s1 = (p.set1_a || 0) + '-' + (p.set1_b || 0);
+                const s2 = (p.set2_a || 0) + '-' + (p.set2_b || 0);
+                const hasSTB = p.supertiebreak_a != null;
+                const stb = hasSTB ? ' · STB ' + (p.supertiebreak_a || 0) + '-' + (p.supertiebreak_b || 0) : '';
 
                 html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--white-5);border-radius:6px;font-size:0.75rem;">' +
-                    '<div style="color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' + esc(p.categoria || '') + '</div>' +
+                    '<div style="color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' + esc(formatCategoria(p.categoria || '')) + '</div>' +
                     '<div><span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(stb) + '</div>' +
-                    '<div style="color:var(--secondary);font-weight:600;">🏆 ' + esc(localIsA ? (semi.equipo_a_nombre || '?') : (semi.equipo_b_nombre || '?')) + '</div></div>';
+                    '<div style="color:var(--secondary);font-weight:600;">🏆 ' + esc(isA ? (semi.equipo_a_nombre || '?') : (semi.equipo_b_nombre || '?')) + '</div></div>';
             });
 
             html += '</div>';
@@ -674,16 +819,16 @@ function renderFinalPublic() {
 
             // Show match results
             fin.partidos.filter(p => p.estado === 'finalizado').forEach(p => {
-                const localIsA = p.ganador_equipo_id === fin.equipo_a_id;
-                const s1 = (p.set1_local || 0) + '-' + (p.set1_visitante || 0);
-                const s2 = (p.set2_local || 0) + '-' + (p.set2_visitante || 0);
-                const hasSTB = p.supertiebreak_local != null;
-                const stb = hasSTB ? ' · STB ' + (p.supertiebreak_local || 0) + '-' + (p.supertiebreak_visitante || 0) : '';
+                const isA = p.ganador_equipo_id === fin.equipo_a_id;
+                const s1 = (p.set1_a || 0) + '-' + (p.set1_b || 0);
+                const s2 = (p.set2_a || 0) + '-' + (p.set2_b || 0);
+                const hasSTB = p.supertiebreak_a != null;
+                const stb = hasSTB ? ' · STB ' + (p.supertiebreak_a || 0) + '-' + (p.supertiebreak_b || 0) : '';
 
                 html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--white-5);border-radius:6px;font-size:0.75rem;">' +
-                    '<div style="color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' + esc(p.categoria || '') + '</div>' +
+                    '<div style="color:var(--on-surface-variant-40);margin-bottom:0.2rem;">' + esc(formatCategoria(p.categoria || '')) + '</div>' +
                     '<div><span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(stb) + '</div>' +
-                    '<div style="color:var(--secondary);font-weight:600;">🏆 ' + esc(localIsA ? (fin.equipo_a_nombre || '?') : (fin.equipo_b_nombre || '?')) + '</div></div>';
+                    '<div style="color:var(--secondary);font-weight:600;">🏆 ' + esc(isA ? (fin.equipo_a_nombre || '?') : (fin.equipo_b_nombre || '?')) + '</div></div>';
             });
 
             html += '</div>';
