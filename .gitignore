@@ -4,3 +4,7 @@ node_modules
 .firebase
 firebase-debug.log
 public/js/config.js
+add_users.js
+add_users.html
+create_master_user.js
+create_admin.js

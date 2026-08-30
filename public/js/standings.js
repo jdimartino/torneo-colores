@@ -12,6 +12,8 @@ export function calculateStandings(equipos, allEnfrentamientos) {
             jornadas_disputadas: 0,
             jornadas_ganadas: 0,
             partidos_ganados: 0,
+            partidos_perdidos: 0,
+            partidos_jugados: 0,
             juegos_ganados: 0
         };
     });
@@ -30,22 +32,26 @@ export function calculateStandings(equipos, allEnfrentamientos) {
         const finalizados = partidos.filter(p => p.estado === 'finalizado');
         const allDone = partidos.length > 0 && finalizados.length === partidos.length;
 
-        let aWins = 0, bWins = 0;
+        let aWins = 0, bWins = 0, aLosses = 0, bLosses = 0;
         finalizados.forEach(p => {
             const g = p.ganador_equipo_id;
             const pJuegos = parseInt(p.games_a) || 0;
             const pJuegosVis = parseInt(p.games_b) || 0;
+            stats[aId].partidos_jugados++;
+            stats[bId].partidos_jugados++;
             if (g === aId) {
                 stats[aId].partidos_ganados++;
+                stats[bId].partidos_perdidos++;
                 stats[aId].juegos_ganados += pJuegos;
                 stats[bId].juegos_ganados += pJuegosVis;
-                stats[aId].puntos += 1;    // 1 punto por partido ganado
+                stats[aId].puntos += 1;
                 aWins++;
             } else if (g === bId) {
                 stats[bId].partidos_ganados++;
+                stats[aId].partidos_perdidos++;
                 stats[bId].juegos_ganados += pJuegosVis;
                 stats[aId].juegos_ganados += pJuegos;
-                stats[bId].puntos += 1;    // 1 punto por partido ganado
+                stats[bId].puntos += 1;
                 bWins++;
             } else {
                 stats[aId].juegos_ganados += pJuegos;

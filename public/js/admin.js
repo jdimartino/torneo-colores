@@ -1,17 +1,24 @@
-import { auth, db } from './firebase.js';
+import { auth, db, functions } from './firebase.js';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
 import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, where, writeBatch, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, finanzasCol } from './tournamentRefs.js';
 import { renderTournamentPanel, loadTournaments, getTournaments } from './tournament.js';
 import { calculateStandings } from './standings.js';
 import { CATEGORIAS_JUGADOR } from './categorias.js';
+import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite, getVisibleModules } from './permissions.js';
+import { httpsCallable } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js';
 
 let allJugadores = [];
 let jugadorSearchTerm = '';
+let jugadorAbiertoId = null;
 let allEquipos = [];
 let allPartidos = [];
 let allJornadas = [];
 let dataLoaded = false;
+let currentUserData = null;
+let allUsuarios = [];
+let _userModalMode = null;
+let _userEditId = null;
 
 function esc(s) {
     if (!s) return '';
@@ -842,6 +849,39 @@ async function loadAdminConfig() {
         console.error('[admin] Error loading admin config:', e);
         currentAdminUids = [];
     }
+
+    if (auth.currentUser) {
+        try {
+            const userDoc = await getDoc(doc(db, 'usuarios', auth.currentUser.uid));
+            if (userDoc.exists()) {
+                currentUserData = { uid: auth.currentUser.uid, ...userDoc.data() };
+                setCurrentUser(currentUserData);
+                console.log('[admin] user data loaded:', currentUserData);
+
+                await updateDoc(doc(db, 'usuarios', auth.currentUser.uid), {
+                    lastLogin: new Date()
+                });
+            } else {
+                if (currentAdminUids.includes(auth.currentUser.uid)) {
+                    currentUserData = {
+                        uid: auth.currentUser.uid,
+                        email: auth.currentUser.email,
+                        nombre: auth.currentUser.displayName || auth.currentUser.email,
+                        rol: ROLES.FULL,
+                        activo: true
+                    };
+                    setCurrentUser(currentUserData);
+                    console.log('[admin] legacy admin user, treating as FULL');
+                } else {
+                    currentUserData = null;
+                    setCurrentUser(null);
+                    console.warn('[admin] user not in usuarios collection and not in adminUids');
+                }
+            }
+        } catch (e) {
+            console.error('[admin] Error loading user data:', e);
+        }
+    }
 }
 
 function isCurrentUserAdmin(user) {
@@ -854,12 +894,18 @@ async function initializeAdminPanel(user) {
         await signOut(auth);
         return false;
     }
+    if (currentUserData && currentUserData.activo === false) {
+        toast('Tu cuenta está desactivada. Contactá al administrador.', 'error');
+        await signOut(auth);
+        return false;
+    }
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('login-container-wrapper').style.display = 'none';
     document.getElementById('admin-panel').style.display = 'block';
     setupTabScroll();
     initTournamentSelector();
     await loadTournamentConfig();
+    applyUIPermissions();
     const tid = getActiveTournamentId();
     console.log('[admin] initializeAdminPanel: tournamentId =', tid);
     if (!tid) {
@@ -880,6 +926,30 @@ async function initializeAdminPanel(user) {
     history.replaceState({ panel: initialPanel }, '', '#' + initialPanel);
     _switchPanel(initialPanel);
     return true;
+}
+
+function applyUIPermissions() {
+    const rol = getCurrentUserRole();
+    console.log('[admin] applyUIPermissions, rol:', rol);
+
+    const tabUsuarios = document.getElementById('tab-usuarios');
+    if (tabUsuarios) {
+        tabUsuarios.style.display = rol === ROLES.MASTER ? '' : 'none';
+    }
+
+    const tabsPorRol = {
+        jugadores: [ROLES.MARCADORES],
+        equipos: [ROLES.MARCADORES],
+        torneos: [ROLES.MARCADORES],
+        administracion: [ROLES.MARCADORES]
+    };
+
+    Object.entries(tabsPorRol).forEach(([panel, rolesExcluidos]) => {
+        const tab = document.querySelector('[data-panel="' + panel + '"]');
+        if (tab) {
+            tab.style.display = rolesExcluidos.includes(rol) ? 'none' : '';
+        }
+    });
 }
 
 // ── Auth ──
@@ -968,6 +1038,10 @@ document.getElementById('finance-modal-overlay')?.addEventListener('click', (e) 
     if (e.target.id === 'finance-modal-overlay') closeFinanceModal();
 });
 
+document.getElementById('user-modal-overlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'user-modal-overlay') closeUserModal();
+});
+
 // ── Data ──
 async function loadData() {
     const tid = getActiveTournamentId();
@@ -1042,7 +1116,16 @@ function initTournamentSelector() {
 }
 
 function renderPanel(panelId) {
-    if (panelId !== 'torneos' && !getActiveTournamentId()) {
+    if (!canRead(panelId)) {
+        const panel = document.getElementById('panel-' + panelId);
+        if (panel) {
+            panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+                '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--error);">block</span>' +
+                '<p style="margin-top:0.5rem;">No tenés acceso a este módulo.</p></div>';
+        }
+        return;
+    }
+    if (panelId !== 'torneos' && panelId !== 'usuarios' && !getActiveTournamentId()) {
         const panel = document.getElementById('panel-' + panelId);
         if (panel) {
             panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
@@ -1062,6 +1145,7 @@ function renderPanel(panelId) {
         case 'final': renderFinal(); break;
         case 'torneos': renderTournamentPanel(); break;
         case 'administracion': renderAdministracion(); break;
+        case 'usuarios': renderUsuarios(); break;
     }
 }
 
@@ -1224,7 +1308,15 @@ function renderJugadoresList() {
 
     const title = document.querySelector('#panel-jugadores .admin-section-title');
     if (title) {
-        title.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.9rem;">groups</span> Jugadores Inscritos (' + filtered.length + (term ? ' de ' + allJugadores.length : '') + ')';
+        const countBadge = filtered.length !== allJugadores.length
+            ? ' de ' + allJugadores.length : '';
+        title.innerHTML =
+            '<div style="display:flex;align-items:center;gap:0.5rem;width:100%;">' +
+                '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">groups</span> Jugadores Inscritos (' + filtered.length + countBadge + ')</span>' +
+                '<button class="btn btn-outline btn-collapse-all" id="btn-collapse-details" type="button">' +
+                    '<span class="material-symbols-outlined">unfold_less</span> Esconder detalles' +
+                '</button>' +
+            '</div>';
     }
 
     listEl.innerHTML =
@@ -1266,26 +1358,108 @@ function renderJugadoresList() {
             } else {
                 pagoBadge = '<span class="badge badge-danger"><span class="material-symbols-outlined" style="font-size:0.6rem;">close</span> Sin pago</span>';
             }
-            return '<div class="player-card">' +
-            '<div class="player-main">' +
-            '<div class="player-name">' + esc(shortName(j)) + '</div>' +
-            '<div class="player-meta">' +
-            (j.telefono ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">phone</span> ' + esc(j.telefono) + ' · ' : '') +
-            (j.email ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">email</span> ' + esc(j.email) : '') +
+
+            const detailRow = (label, value, opts) => {
+                if (value === undefined || value === null || value === '') return '';
+                const cls = 'detail-value' + (opts?.mono ? ' mono' : '') + (opts?.muted ? ' muted' : '');
+                const isUrl = /^https?:\/\//i.test(String(value));
+                const valHtml = isUrl
+                    ? '<a href="' + esc(value) + '" target="_blank" rel="noopener">' + esc(value) + '</a>'
+                    : esc(String(value));
+                return '<div class="detail-item"><span class="detail-label">' + esc(label) + '</span><span class="' + cls + '">' + valHtml + '</span></div>';
+            };
+            const details = '<div class="details-grid">' +
+                detailRow('ID', j.id, { mono: true }) +
+                detailRow('Nombre', j.nombre) +
+                detailRow('Apellidos', j.apellidos) +
+                detailRow('Email', j.email) +
+                detailRow('Teléfono', j.telefono) +
+                detailRow('Género', j.genero) +
+                detailRow('Categoría', j.categoria) +
+                detailRow('Status socio', j.status_socio) +
+                detailRow('N° socio', j.numero_socio) +
+                detailRow('Equipo', teamName) +
+                detailRow('Pago recibido', j.pago_recibido ? 'Sí' : 'No') +
+                detailRow('Exonerado', j.exonerado ? 'Sí' : 'No') +
+                detailRow('Método de pago', j.metodo_pago) +
+                detailRow('Fecha pago', j.fecha_pago) +
+                detailRow('Monto (Bs)', j.monto ? formatBs(j.monto) : '') +
+                detailRow('Monto (USD)', j.monto_usd ? '$' + (+j.monto_usd).toFixed(2) : '') +
+                detailRow('Teléfono móvil', j.telefono_movil) +
+                detailRow('N° operación', j.numero_operacion) +
+                detailRow('Descripción método', j.descripcion_metodo) +
+                detailRow('Comprobante', j.comprobante) +
+                detailRow('Payment protected', j.payment_protected ? 'Sí' : 'No', { muted: true }) +
+                '</div>';
+
+            const isOpen = jugadorAbiertoId === j.id;
+            return '<div class="player-card' + (isOpen ? ' open' : '') + '" data-jugador-id="' + j.id + '">' +
+            '<div class="player-header">' +
+                '<div class="player-main">' +
+                    '<div class="player-name">' + esc(shortName(j)) + '</div>' +
+                    '<div class="player-meta">' +
+                    (j.telefono ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">phone</span> ' + esc(j.telefono) + ' · ' : '') +
+                    (j.email ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">email</span> ' + esc(j.email) : '') +
+                    '</div>' +
+                    '<div style="margin-top:0.25rem;display:flex;flex-wrap:wrap;gap:0.3rem;">' +
+                    catBadge + statusBadge + teamBadge + pagoBadge +
+                    '</div>' +
+                '</div>' +
+                '<div style="display:flex;align-items:center;gap:0.4rem;">' +
+                    '<span class="material-symbols-outlined player-chev">expand_more</span>' +
+                    '<button type="button" class="btn btn-sm btn-outline" data-edit-jugador="' + j.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span></button>' +
+                    '<button type="button" class="btn btn-sm btn-danger" data-del-jugador="' + j.id + '" title="Eliminar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
+                '</div>' +
             '</div>' +
-            '<div style="margin-top:0.25rem;display:flex;flex-wrap:wrap;gap:0.3rem;">' +
-            catBadge + statusBadge + teamBadge + pagoBadge +
-            '</div>' +
-            '</div>' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;">' +
-            '<button class="btn btn-sm btn-outline" data-edit-jugador="' + j.id + '"><span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span></button>' +
-            '<button class="btn btn-sm btn-danger" data-del-jugador="' + j.id + '"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
-            '</div>' +
+            '<div class="player-details">' + details + '</div>' +
             '</div>';
         }).join('');
 
-    listEl.querySelectorAll('[data-edit-jugador]').forEach(b => b.addEventListener('click', () => editJugador(b.dataset.editJugador)));
-    listEl.querySelectorAll('[data-del-jugador]').forEach(b => b.addEventListener('click', () => safeAction(() => deleteJugador(b.dataset.delJugador))));
+    listEl.querySelectorAll('[data-edit-jugador]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editJugador(b.dataset.editJugador);
+    }));
+    listEl.querySelectorAll('[data-del-jugador]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        safeAction(() => deleteJugador(b.dataset.delJugador));
+    }));
+
+    listEl.querySelectorAll('.player-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('[data-edit-jugador]') || e.target.closest('[data-del-jugador]')) return;
+            const id = card.dataset.jugadorId;
+            const wasOpen = card.classList.contains('open');
+            listEl.querySelectorAll('.player-card.open').forEach(c => c.classList.remove('open'));
+            if (!wasOpen) {
+                card.classList.add('open');
+                jugadorAbiertoId = id;
+                requestAnimationFrame(() => {
+                    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                });
+            } else {
+                jugadorAbiertoId = null;
+            }
+            updateCollapseAllButton();
+        });
+    });
+
+    const collapseBtn = document.getElementById('btn-collapse-details');
+    if (collapseBtn) {
+        collapseBtn.addEventListener('click', () => {
+            listEl.querySelectorAll('.player-card.open').forEach(c => c.classList.remove('open'));
+            jugadorAbiertoId = null;
+            updateCollapseAllButton();
+        });
+    }
+    updateCollapseAllButton();
+}
+
+function updateCollapseAllButton() {
+    const btn = document.getElementById('btn-collapse-details');
+    if (!btn) return;
+    const listEl = document.getElementById('jugadores-list');
+    const hasOpen = listEl ? listEl.querySelectorAll('.player-card.open').length > 0 : false;
+    btn.classList.toggle('visible', hasOpen);
 }
 
 async function addJugador() {
@@ -1475,67 +1649,74 @@ function handleCSVFile(e) {
     if (nameEl) nameEl.textContent = file.name;
     const reader = new FileReader();
     reader.onload = (evt) => {
-        const text = evt.target.result;
-        const lines = text.split('\n').filter(l => l.trim());
-        if (lines.length < 2) { toast('El CSV está vacío', 'error'); return; }
-        const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
-        const colMap = {
-            nombre: headers.findIndex(h => h.includes('nombre')),
-            apellidos: headers.findIndex(h => h.includes('apellido')),
-            genero: headers.findIndex(h => h.includes('genero') || h.includes('género')),
-            categoria: headers.findIndex(h => h.includes('categ')),
-            telefono: headers.findIndex(h => h.includes('telefono') || h.includes('teléfono')),
-            email: headers.findIndex(h => h.includes('correo') || h.includes('email')),
-            pago: headers.findIndex(h => h.includes('pago') && !h.includes('metodo') && !h.includes('método') && !h.includes('📱') && !h.includes('comprobante') && !h.includes('monto')),
-            status_socio: headers.findIndex(h => h.includes('status')),
-            numero_socio: headers.findIndex(h => h.includes('socio')),
-            metodo_pago: headers.findIndex(h => h.includes('metodo') || h.includes('método')),
-            numero_operacion: headers.findIndex(h => h.includes('operación') || h.includes('operacion') || h.includes('referencia')),
-            fecha_pago: headers.findIndex(h => h.includes('fecha')),
-            monto: headers.findIndex(h => h.includes('monto')),
-            telefono_movil: headers.findIndex(h => h.includes('pago móvil')),
-            comprobante: headers.findIndex(h => h.includes('comprobante'))
-        };
-        if (colMap.nombre === -1 || colMap.email === -1) {
-            toast('El CSV no tiene las columnas esperadas (Nombre, Correo)', 'error'); return;
-        }
-        const existingEmails = new Set(allJugadores.map(j => (j.email || '').toLowerCase().trim()));
-        const rows = [];
-        for (let i = 1; i < lines.length; i++) {
-            const cols = parseCSVLine(lines[i]);
-            const email = (cols[colMap.email] || '').toLowerCase().trim();
-            if (!email) continue;
-            const rawPago = colMap.pago !== -1 ? (cols[colMap.pago] || '').trim().toLowerCase() : '';
-            const rawMetodo = colMap.metodo_pago !== -1 ? (cols[colMap.metodo_pago] || '').trim() : '';
-            let metodoPago = rawMetodo;
-            if (rawMetodo.includes('Pago Móvil') || rawMetodo.includes('pago móvil') || rawMetodo.includes('pago movil')) metodoPago = 'Pago Móvil';
-            const montoBs = parseMontoCSV(colMap.monto !== -1 ? (cols[colMap.monto] || '') : '');
-            rows.push({
-                nombre: (cols[colMap.nombre] || '').trim(),
-                apellidos: (colMap.apellidos !== -1 ? (cols[colMap.apellidos] || '') : '').trim(),
-                genero: (colMap.genero !== -1 ? (cols[colMap.genero] || '') : '').trim(),
-                categoria: (colMap.categoria !== -1 ? (cols[colMap.categoria] || '') : '').trim(),
-                telefono: (colMap.telefono !== -1 ? (cols[colMap.telefono] || '') : '').trim(),
-                email: email,
-                pago_recibido: rawPago === 'x',
-                exonerado: rawPago === '0',
-                status_socio: (colMap.status_socio !== -1 ? (cols[colMap.status_socio] || '') : '').trim(),
-                numero_socio: (colMap.numero_socio !== -1 ? (cols[colMap.numero_socio] || '') : '').trim(),
-                metodo_pago: metodoPago,
-                numero_operacion: (colMap.numero_operacion !== -1 ? (cols[colMap.numero_operacion] || '') : '').trim(),
-                fecha_pago: (colMap.fecha_pago !== -1 ? (cols[colMap.fecha_pago] || '') : '').trim(),
-                monto: montoBs,
-                telefono_movil: (colMap.telefono_movil !== -1 ? (cols[colMap.telefono_movil] || '') : '').trim(),
-                comprobante: (colMap.comprobante !== -1 ? (cols[colMap.comprobante] || '') : '').trim(),
-                _exists: existingEmails.has(email)
-            });
-        }
-        const nuevos = rows.filter(r => !r._exists);
-        const existentes = rows.filter(r => r._exists);
-        showCSVPreview(rows, nuevos, existentes);
+        handleCSVText(evt.target.result, file.name);
     };
     reader.readAsText(file);
     e.target.value = '';
+}
+
+function handleCSVText(text, sourceLabel) {
+    const nameEl = document.getElementById('csv-file-name');
+    if (nameEl) nameEl.textContent = sourceLabel || 'Google Sheets';
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length < 2) { toast('El CSV está vacío', 'error'); return; }
+    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+    const colMap = {
+        nombre: headers.findIndex(h => h.includes('nombre')),
+        apellidos: headers.findIndex(h => h.includes('apellido')),
+        genero: headers.findIndex(h => h.includes('genero') || h.includes('género')),
+        categoria: headers.findIndex(h => h.includes('categ')),
+        telefono: headers.findIndex(h => h.includes('telefono') || h.includes('teléfono')),
+        email: headers.findIndex(h => h.includes('correo') || h.includes('email')),
+        pago: headers.findIndex(h => h.includes('pago') && !h.includes('metodo') && !h.includes('método') && !h.includes('📱') && !h.includes('comprobante') && !h.includes('monto')),
+        status_socio: headers.findIndex(h => h.includes('status')),
+        numero_socio: headers.findIndex(h => h.includes('socio')),
+        metodo_pago: headers.findIndex(h => h.includes('metodo') || h.includes('método')),
+        numero_operacion: headers.findIndex(h => h.includes('operación') || h.includes('operacion') || h.includes('referencia')),
+        fecha_pago: headers.findIndex(h => h.includes('fecha')),
+        monto: headers.findIndex(h => h.includes('monto')),
+        telefono_movil: headers.findIndex(h => h.includes('pago móvil')),
+        comprobante: headers.findIndex(h => h.includes('comprobante'))
+    };
+    if (colMap.nombre === -1 || colMap.email === -1) {
+        toast('El CSV no tiene las columnas esperadas (Nombre, Correo)', 'error'); return;
+    }
+    const existingEmails = new Set(allJugadores.map(j => (j.email || '').toLowerCase().trim()));
+    const playerByEmail = new Map(allJugadores.map(j => [(j.email || '').toLowerCase().trim(), j.id]));
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        const cols = parseCSVLine(lines[i]);
+        const email = (cols[colMap.email] || '').toLowerCase().trim();
+        if (!email) continue;
+        const rawPago = colMap.pago !== -1 ? (cols[colMap.pago] || '').trim().toLowerCase() : '';
+        const rawMetodo = colMap.metodo_pago !== -1 ? (cols[colMap.metodo_pago] || '').trim() : '';
+        let metodoPago = rawMetodo;
+        if (rawMetodo.includes('Pago Móvil') || rawMetodo.includes('pago móvil') || rawMetodo.includes('pago movil')) metodoPago = 'Pago Móvil';
+        const montoBs = parseMontoCSV(colMap.monto !== -1 ? (cols[colMap.monto] || '') : '');
+        rows.push({
+            nombre: (cols[colMap.nombre] || '').trim(),
+            apellidos: (colMap.apellidos !== -1 ? (cols[colMap.apellidos] || '') : '').trim(),
+            genero: (colMap.genero !== -1 ? (cols[colMap.genero] || '') : '').trim(),
+            categoria: (colMap.categoria !== -1 ? (cols[colMap.categoria] || '') : '').trim(),
+            telefono: (colMap.telefono !== -1 ? (cols[colMap.telefono] || '') : '').trim(),
+            email: email,
+            pago_recibido: rawPago === 'x',
+            exonerado: rawPago === '0',
+            status_socio: (colMap.status_socio !== -1 ? (cols[colMap.status_socio] || '') : '').trim(),
+            numero_socio: (colMap.numero_socio !== -1 ? (cols[colMap.numero_socio] || '') : '').trim(),
+            metodo_pago: metodoPago,
+            numero_operacion: (colMap.numero_operacion !== -1 ? (cols[colMap.numero_operacion] || '') : '').trim(),
+            fecha_pago: (colMap.fecha_pago !== -1 ? (cols[colMap.fecha_pago] || '') : '').trim(),
+            monto: montoBs,
+            telefono_movil: (colMap.telefono_movil !== -1 ? (cols[colMap.telefono_movil] || '') : '').trim(),
+            comprobante: (colMap.comprobante !== -1 ? (cols[colMap.comprobante] || '') : '').trim(),
+            _exists: existingEmails.has(email),
+            id: playerByEmail.get(email) || null
+        });
+    }
+    const nuevos = rows.filter(r => !r._exists);
+    const existentes = rows.filter(r => r._exists);
+    showCSVPreview(rows, nuevos, existentes);
 }
 
 function showCSVPreview(all, nuevos, existentes) {
@@ -2131,15 +2312,15 @@ async function renderDrawDetail(panel) {
             if (isEmpty) {
                 html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>';
             } else {
-                html += '<div style="display:flex;flex-direction:column;gap:0.25rem;">' +
-                    '<div style="font-size:0.78rem;display:flex;align-items:center;gap:0.3rem;">' +
+                html += '<div style="display:flex;flex-direction:column;gap:0.25rem;text-align:center;">' +
+                    '<div style="font-size:0.78rem;display:flex;align-items:center;justify-content:center;gap:0.3rem;">' +
                     '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';"></span>' +
                     '<span style="font-weight:500;">' + esc(j1Name || '—') + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
                     '<span style="font-weight:500;">' + esc(j2Name || '—') + '</span>' +
                     '</div>' +
                     '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
-                    '<div style="font-size:0.78rem;display:flex;align-items:center;gap:0.3rem;">' +
+                    '<div style="font-size:0.78rem;display:flex;align-items:center;justify-content:center;gap:0.3rem;">' +
                     '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';"></span>' +
                     '<span style="font-weight:500;">' + esc(j3Name || '—') + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
@@ -3230,7 +3411,6 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
         '<div class="res-public-dot" style="background:' + teamAColor + ';"></div>' +
         '<div>' +
         '<div class="res-public-name">' + esc(j1Name + ' / ' + j2Name) + '</div>' +
-        '<div class="res-public-rank">—</div>' +
         '</div>' +
         '<div class="res-public-score">' + scoreA + '</div>' +
         '</div>' +
@@ -3238,7 +3418,6 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
         '<div class="res-public-dot" style="background:' + teamBColor + ';"></div>' +
         '<div>' +
         '<div class="res-public-name">' + esc(j3Name + ' / ' + j4Name) + '</div>' +
-        '<div class="res-public-rank">—</div>' +
         '</div>' +
         '<div class="res-public-score">' + scoreB + '</div>' +
         '</div>' +
@@ -5062,4 +5241,292 @@ function renderFinalResultadoForm(fin, part) {
         '</div></div>';
 
     return html;
+}
+
+// ═══════════════════════════════════════════
+// USUARIOS
+// ═══════════════════════════════════════════
+
+function formatDateFull(fecha) {
+    if (!fecha) return '—';
+    try {
+        const d = fecha?.toDate ? fecha.toDate() : new Date(fecha);
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    } catch (e) { return '—'; }
+}
+
+async function renderUsuarios() {
+    const panel = document.getElementById('panel-usuarios');
+    if (!panel) return;
+
+    panelLoading(panel, 'Cargando usuarios...');
+
+    try {
+        const snapshot = await getDocs(query(collection(db, 'usuarios'), orderBy('nombre')));
+        allUsuarios = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        const rolActual = getCurrentUserRole();
+        const masterActual = allUsuarios.find(u => u.rol === ROLES.MASTER);
+
+        let html = '<div class="admin-section-title" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;">' +
+            '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">manage_accounts</span> ' +
+            'Gestión de Usuarios (' + allUsuarios.length + ')</span>' +
+            '<button class="btn btn-primary" onclick="openUserModal(\'crear\')" style="padding:0.4rem 0.8rem;font-size:0.8rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:0.9rem;">person_add</span> Nuevo</button>' +
+            '</div>';
+
+        if (allUsuarios.length === 0) {
+            html += '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+                '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--on-surface-variant);">person_off</span>' +
+                '<p style="margin-top:0.5rem;">No hay usuarios registrados.</p></div>';
+        } else {
+            allUsuarios.forEach(u => {
+                const rolInfo = ROL_LABELS[u.rol] || { name: u.rol, short: u.rol };
+                const isMasterUser = u.rol === ROLES.MASTER;
+                const isDisabled = u.activo === false;
+
+                let rolBadgeClass = 'badge';
+                if (u.rol === ROLES.MASTER) rolBadgeClass = 'badge-primary';
+                else if (u.rol === ROLES.FULL) rolBadgeClass = 'badge-secondary';
+                else rolBadgeClass = 'badge-outline';
+
+                let estadoLabel = isDisabled ? 'INACTIVO' : 'ACTIVO';
+                let estadoClass = isDisabled ? 'badge-danger' : 'badge-success';
+
+                html += '<div class="card" style="margin-bottom:0.75rem;' + (isDisabled ? 'opacity:0.6;' : '') + '">';
+                html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;">';
+                html += '<div style="flex:1;min-width:0;">';
+                html += '<div style="font-family:Lexend;font-weight:600;font-size:0.9rem;margin-bottom:0.2rem;">' + esc(u.nombre || '—') + '</div>';
+                html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' + esc(u.email || '') + '</div>';
+                html += '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;">';
+                html += '<span class="badge ' + rolBadgeClass + '">' + rolInfo.short + '</span>';
+                html += '<span class="badge ' + estadoClass + '">' + estadoLabel + '</span>';
+                html += '</div>';
+
+                if (u.createdAt) {
+                    html += '<div style="font-size:0.68rem;color:var(--on-surface-variant-30);margin-top:0.4rem;">';
+                    html += 'Creado: ' + formatDateFull(u.createdAt);
+                    if (u.lastLogin) html += ' · Último acceso: ' + formatDateFull(u.lastLogin);
+                    html += '</div>';
+                }
+
+                html += '</div>';
+                html += '<div style="display:flex;gap:0.3rem;flex-shrink:0;">';
+
+                if (!isMasterUser) {
+                    html += '<button class="btn btn-sm btn-outline" data-edit-usuario="' + u.id + '">' +
+                        '<span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span></button>';
+                    html += '<button class="btn btn-sm ' + (isDisabled ? 'btn-primary' : 'btn-danger') + '" data-toggle-usuario="' + u.id + '">' +
+                        (isDisabled ? 'Activar' : 'Desactivar') + '</button>';
+                } else {
+                    html += '<span class="badge" style="background:var(--primary-12);color:var(--primary);">Protegido</span>';
+                }
+
+                html += '</div></div></div>';
+            });
+        }
+
+        panel.innerHTML = html;
+
+        panel.querySelectorAll('[data-edit-usuario]').forEach(b => {
+            b.addEventListener('click', () => openUserModal('editar', b.dataset.editUsuario));
+        });
+
+        panel.querySelectorAll('[data-toggle-usuario]').forEach(b => {
+            b.addEventListener('click', () => toggleUsuario(b.dataset.toggleUsuario));
+        });
+
+    } catch (e) {
+        console.error('[admin] Error loading usuarios:', e);
+        panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+            '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--error);">error</span>' +
+            '<p style="margin-top:0.5rem;">Error al cargar usuarios.</p></div>';
+    }
+}
+
+function openUserModal(mode, userId = null) {
+    _userModalMode = mode;
+    _userEditId = userId;
+
+    const overlay = document.getElementById('user-modal-overlay');
+    const titulo = document.getElementById('um-titulo');
+    const nombreInput = document.getElementById('um-nombre');
+    const emailInput = document.getElementById('um-email');
+    const passwordInput = document.getElementById('um-password');
+    const passwordGroup = document.getElementById('um-password-group');
+    const rolSelect = document.getElementById('um-rol');
+    const estadoGroup = document.getElementById('um-estado-group');
+    const estadoSelect = document.getElementById('um-estado');
+    const btnSave = document.getElementById('um-btn-save');
+    const errorDiv = document.getElementById('um-error');
+
+    errorDiv.style.display = 'none';
+
+    if (mode === 'editar' && userId) {
+        titulo.textContent = 'Editar Usuario';
+        btnSave.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">save</span> Guardar';
+        passwordGroup.style.display = 'none';
+        estadoGroup.style.display = 'block';
+
+        const user = allUsuarios.find(u => u.id === userId);
+        if (user) {
+            nombreInput.value = user.nombre || '';
+            emailInput.value = user.email || '';
+            rolSelect.value = user.rol || 'FULL';
+            estadoSelect.value = String(user.activo !== false);
+        }
+    } else {
+        titulo.textContent = 'Nuevo Usuario';
+        btnSave.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">person_add</span> Crear';
+        passwordGroup.style.display = 'block';
+        estadoGroup.style.display = 'none';
+        nombreInput.value = '';
+        emailInput.value = '';
+        passwordInput.value = '';
+        rolSelect.value = 'FULL';
+    }
+
+    overlay.classList.add('active');
+    overlay.style.display = 'flex';
+}
+
+function closeUserModal() {
+    const overlay = document.getElementById('user-modal-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        overlay.style.display = 'none';
+    }
+    _userModalMode = null;
+    _userEditId = null;
+}
+
+async function saveUserModal() {
+    const nombre = document.getElementById('um-nombre').value.trim();
+    const email = document.getElementById('um-email').value.trim();
+    const password = document.getElementById('um-password').value;
+    const rol = document.getElementById('um-rol').value;
+    const activo = document.getElementById('um-estado').value === 'true';
+    const errorDiv = document.getElementById('um-error');
+
+    errorDiv.style.display = 'none';
+
+    if (!nombre) {
+        errorDiv.textContent = 'El nombre es requerido';
+        errorDiv.style.display = 'block';
+        return;
+    }
+    if (!email) {
+        errorDiv.textContent = 'El email es requerido';
+        errorDiv.style.display = 'block';
+        return;
+    }
+    if (_userModalMode === 'crear' && (!password || password.length < 6)) {
+        errorDiv.textContent = 'La contraseña debe tener al menos 6 caracteres';
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    if (_userModalMode === 'editar' && _userEditId) {
+        showLoading('Guardando...');
+        try {
+            await updateDoc(doc(db, 'usuarios', _userEditId), {
+                nombre: nombre,
+                rol: rol,
+                activo: activo
+            });
+            toast('Usuario actualizado', 'success');
+            closeUserModal();
+            renderUsuarios();
+        } catch (e) {
+            console.error('[admin] Error updating user:', e);
+            errorDiv.textContent = e.message || 'Error al actualizar usuario';
+            errorDiv.style.display = 'block';
+        } finally {
+            hideLoading();
+        }
+    } else {
+        showLoading('Creando usuario...');
+        try {
+            const createUser = httpsCallable(functions, 'createUser');
+
+            const result = await createUser({
+                email: email,
+                password: password,
+                nombre: nombre,
+                rol: rol
+            });
+
+            if (result.data?.success) {
+                toast('Usuario creado exitosamente', 'success');
+                closeUserModal();
+                renderUsuarios();
+            }
+        } catch (e) {
+            console.error('[admin] Error creating user:', e);
+            let msg = 'Error al crear usuario';
+            if (e.code === 'auth/email-already-exists') {
+                msg = 'Ya existe un usuario con ese email';
+            } else if (e.message) {
+                msg = e.message;
+            }
+            errorDiv.textContent = msg;
+            errorDiv.style.display = 'block';
+        } finally {
+            hideLoading();
+        }
+    }
+}
+
+async function toggleUsuario(uid) {
+    const user = allUsuarios.find(u => u.id === uid);
+    if (!user) return;
+
+    const newState = !user.activo;
+    const action = newState ? 'activar' : 'desactivar';
+
+    if (!confirm('¿' + action.charAt(0).toUpperCase() + action.slice(1) + ' este usuario?\n\n' + user.nombre + '\n' + user.email)) return;
+
+    showLoading(action + '...');
+    try {
+        await updateDoc(doc(db, 'usuarios', uid), {
+            activo: newState
+        });
+        toast('Usuario ' + action + 'do', 'success');
+        renderUsuarios();
+    } catch (e) {
+        console.error('[admin] Error toggling user:', e);
+        toast(e.message || 'Error al ' + action, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+// Exponer funciones al window
+window.openUserModal = openUserModal;
+window.closeUserModal = closeUserModal;
+window.saveUserModal = saveUserModal;
+window.renderUsuarios = renderUsuarios;
+
+// ── Service Worker Registration ──
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((registration) => {
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              if (confirm('Una nueva versión del Torneo de Colores está disponible. ¿Querés recargar?')) {
+                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                window.location.reload();
+              }
+            }
+          });
+        }
+      });
+    }).catch((error) => {
+      console.log('[SW] Registration failed:', error);
+    });
+  });
 }

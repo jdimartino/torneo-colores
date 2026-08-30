@@ -136,7 +136,6 @@ function unsubscribeResultadosLive() {
 // Live listeners sobre jornadas/{id}/partidos (los que carga el admin en Resultados)
 function setupResultadosLive() {
     unsubscribeResultadosLive();
-    if (!getActiveTournamentId()) return;
     for (const jornada of allJornadas) {
         const col = collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos');
         const unsub = onSnapshot(col, (snap) => {
@@ -160,6 +159,7 @@ function setupResultadosLive() {
 }
 
 async function loadAllData() {
+    if (typeof window !== "undefined") { window._dbg = { jugadores: ()=>allJugadores, equipos: ()=>allEquipos, jornadas: ()=>allJornadas, loadAllData, reloadEquipos: ()=>renderEquipos(), get tournamentId(){return getActiveTournamentId();}, get dataLoaded(){return _dataLoaded;} }; }
     if (_dataLoaded) return;
     await loadTournamentConfig();
     if (!getActiveTournamentId()) return;
@@ -169,9 +169,23 @@ async function loadAllData() {
             getDocs(col('equipos')),
             getDocs(col('jornadas'))
         ]);
+        console.log('[public] jugadores docs:', jugSnap.docs.length, 'equipos docs:', equipSnap.docs.length, 'jornadas docs:', jornSnap.docs.length);
         allJugadores = jugSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
         allEquipos = equipSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
         allJornadas = jornSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+
+        // Exponer para debug
+        if (typeof window !== 'undefined') {
+            window._dbg = {
+                jugadores: () => allJugadores,
+                equipos: () => allEquipos,
+                jornadas: () => allJornadas,
+                loadAllData,
+                reloadEquipos: () => renderEquipos(),
+                get tournamentId() { return getActiveTournamentId(); },
+                get dataLoaded() { return _dataLoaded; }
+            };
+        }
 
         // Load partidos by category (the ones the admin writes/scores) and build
         // enfrentamientos por jornada (misma fuente que el admin para posiciones)
@@ -202,6 +216,7 @@ async function loadAllData() {
     }
     setupResultadosLive();
     _dataLoaded = true;
+    window.dispatchEvent(new CustomEvent('appDataLoaded'));
 }
 
 
@@ -230,6 +245,22 @@ function renderPosiciones() {
         '</div>' +
         '</div>';
 
+    // Header de stats
+    html += '<div class="card" style="margin-bottom:0.5rem;padding:0.5rem 0.75rem;">' +
+        '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">' +
+        '<div style="min-width:1.5rem;"></div>' +
+        '<div style="flex:1;"></div>' +
+        '<div style="display:flex;gap:0.5rem;">' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">JJ</span></div>' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">JG</span></div>' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PJ</span></div>' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PG</span></div>' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PP</span></div>' +
+        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">PTS</span></div>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+
     // Standings cards
     standings.forEach((s, i) => {
         const isQualified = i < 4;
@@ -237,42 +268,36 @@ function renderPosiciones() {
         const qualBg = isQualified ? 'background:rgba(255,255,255,0.03);' : '';
 
         html += '<div class="card" style="' + qualBorder + qualBg + 'margin-bottom:0.5rem;">' +
-            '<div style="display:flex;align-items:flex-start;justify-content:space-between;">' +
-            '<div style="display:flex;align-items:center;gap:0.6rem;">' +
-            '<div style="min-width:1.8rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:800;font-size:1.1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
+            '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+            '<div style="min-width:1.5rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
             '</div>' +
-            '<div>' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + s.color + ';"></span>' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.88rem;">' + esc(s.nombre) + '</span>' +
+            '<div style="flex:1;display:flex;align-items:center;gap:0.4rem;min-width:0;">' +
+            '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.nombre) + '</span>' +
             '</div>' +
-            (isQualified ? '<div style="font-size:0.65rem;color:var(--secondary);font-weight:600;margin-top:0.1rem;"><span class="material-symbols-outlined" style="font-size:0.6rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '<div style="font-size:0.65rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">Sin clasificación</div>') +
+            '<div style="display:flex;gap:0.5rem;">' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.jornadas_disputadas + '</div>' +
             '</div>' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--primary);">' + s.jornadas_ganadas + '</div>' +
             '</div>' +
-            '<div style="text-align:right;">' +
-            '<div style="font-family:Lexend;font-weight:800;font-size:1.2rem;color:var(--primary);">' + s.puntos + '</div>' +
-            '<div style="font-size:0.62rem;color:var(--on-surface-variant-40);text-transform:uppercase;letter-spacing:0.5px;">PUNTOS</div>' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_jugados + '</div>' +
             '</div>' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + s.partidos_ganados + '</div>' +
             '</div>' +
-            '<div style="display:flex;gap:0.6rem;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--white-5);flex-wrap:wrap;">' +
-            '<div style="flex:1;min-width:3rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.jornadas_disputadas + '</div>' +
-            '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PJ</div>' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_perdidos + '</div>' +
             '</div>' +
-            '<div style="flex:1;min-width:3rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.jornadas_ganadas + '</div>' +
-            '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PG</div>' +
-            '</div>' +
-            '<div style="flex:1;min-width:3rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.partidos_ganados + '</div>' +
-            '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PARTIDOS</div>' +
-            '</div>' +
-            '<div style="flex:1;min-width:3rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.juegos_ganados + '</div>' +
-            '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">JG</div>' +
+            '<div style="min-width:2.2rem;text-align:center;">' +
+            '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:var(--primary);">' + s.puntos + '</div>' +
             '</div>' +
             '</div>' +
+            '</div>' +
+            (isQualified ? '<div style="font-size:0.6rem;color:var(--secondary);font-weight:600;margin-top:0.2rem;padding-top:0.2rem;border-top:1px solid var(--white-5);"><span class="material-symbols-outlined" style="font-size:0.55rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '') +
             '</div>';
     });
 
@@ -311,8 +336,16 @@ function renderPosiciones() {
             '</div>';
     }
 
-    html += '<div style="font-size:0.65rem;color:var(--on-surface-variant-40);text-align:center;margin-top:0.75rem;">' +
-        'PJ = Jornadas Disputadas · PG = Jornadas Ganadas · PARTIDOS = Partidos Ganados · JG = Juegos Ganados' +
+    // Leyenda
+    html += '<div class="card" style="border-left:4px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
+        '<div style="font-family:Lexend;font-weight:600;font-size:0.8rem;margin-bottom:0.6rem;color:var(--on-surface-variant-40);"><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">info</span> CÁLCULO DE PUNTOS</div>' +
+        '<div style="display:flex;flex-direction:column;gap:0.4rem;font-size:0.72rem;color:var(--on-surface-variant-40);">' +
+        '<div><span style="font-weight:600;">JJ (Jornadas Disputadas):</span> Total de jornadas jugadas por el equipo.</div>' +
+        '<div><span style="font-weight:600;color:var(--primary);">JG (Jornadas Ganadas):</span> Se gana la jornada con 4+ partidos ganados. +5 puntos bonus.</div>' +
+        '<div><span style="font-weight:600;color:var(--secondary);">PG (Partidos Ganados):</span> Cada partido ganado suma +1 punto.</div>' +
+        '<div><span style="font-weight:600;">PP (Partidos Perdidos):</span> Los partidos perdidos no suman puntos.</div>' +
+        '<div><span style="font-weight:600;">PJ (Partidos Jugados):</span> Total de partidos finalizados/completados.</div>' +
+        '</div>' +
         '</div>';
 
     el.innerHTML = html;
@@ -502,48 +535,190 @@ function renderInicio() {
     `;
 }
 
-// ── Equipos ──
+// ── Equipos (drill-down) ──
+let _openEquipoId = null;
+let _openJugadorId = null;
+
+function _jugadorNombre(jugId) {
+    if (!jugId) return '';
+    const j = allJugadores.find(x => x.id === jugId);
+    return j ? esc(shortName(j)) : '';
+}
+
+function _partidosDelJugador(jugId) {
+    const partidos = [];
+    const add = (p, fuente, jornadaId, jornadaNum, jornadaFecha) => {
+        const ids = [
+            p.jugador_a_1_id, p.jugador_a_2_id, p.jugador_b_1_id, p.jugador_b_2_id
+        ].filter(Boolean);
+        if (ids.includes(jugId)) {
+            partidos.push({ p, fuente, jornadaId, jornadaNum, jornadaFecha });
+        }
+    };
+
+    allEnfrentamientos.forEach(f => {
+        (f.partidos || []).forEach(p => {
+            add(p, 'roundRobin', f._jornadaId, f._jornadaNumero, f._jornadaFecha);
+        });
+    });
+    allPartidosEliminatoria.forEach(p => {
+        add(p, 'partido', p._jornadaId, p._jornadaNumero, p._jornadaFecha);
+    });
+    allSemifinales.forEach(s => {
+        const ids = [s.jugador_a_1_id, s.jugador_a_2_id, s.jugador_b_1_id, s.jugador_b_2_id].filter(Boolean);
+        if (ids.includes(jugId)) partidos.push({ p: s, fuente: 'semifinal', jornadaId: null, jornadaNum: null, jornadaFecha: null });
+    });
+    allFinales.forEach(f => {
+        const ids = [f.jugador_a_1_id, f.jugador_a_2_id, f.jugador_b_1_id, f.jugador_b_2_id].filter(Boolean);
+        if (ids.includes(jugId)) partidos.push({ p: f, fuente: 'final', jornadaId: null, jornadaNum: null, jornadaFecha: null });
+    });
+
+    return partidos.sort((a, b) => {
+        if (a.jornadaNum !== b.jornadaNum) return (a.jornadaNum || 0) - (b.jornadaNum || 0);
+        return a.fuente.localeCompare(b.fuente);
+    });
+}
+
+function _renderJugadorPartidos(jugId, equipoId) {
+    const partidos = _partidosDelJugador(jugId);
+    if (!partidos.length) {
+        return '<div class="sin-partidos">Aún no jugó ningún partido.</div>';
+    }
+    return partidos.map(({ p, fuente, jornadaNum, jornadaFecha }) => {
+        const isEquipoA = (p.equipo_a_id || p.equipo_local_id) === equipoId;
+        const miEquipoId = isEquipoA ? (p.equipo_a_id || p.equipo_local_id) : (p.equipo_b_id || p.equipo_visitante_id);
+        const oEquipoId = isEquipoA ? (p.equipo_b_id || p.equipo_visitante_id) : (p.equipo_a_id || p.equipo_local_id);
+
+        const misJugadores = isEquipoA
+            ? [p.jugador_a_1_id, p.jugador_a_2_id]
+            : [p.jugador_b_1_id, p.jugador_b_2_id];
+        const oJugadores = isEquipoA
+            ? [p.jugador_b_1_id, p.jugador_b_2_id]
+            : [p.jugador_a_1_id, p.jugador_a_2_id];
+
+        const pareja = misJugadores.filter(id => id && id !== jugId).map(_jugadorNombre).join(' / ') || '—';
+        const oponente = oJugadores.map(_jugadorNombre).join(' / ') || '—';
+
+        let resultClass = 'pending';
+        let resultText = 'Pendiente';
+        if (p.ganador_equipo_id) {
+            resultClass = p.ganador_equipo_id === miEquipoId ? 'win' : 'lose';
+            resultText = p.ganador_equipo_id === miEquipoId ? 'Ganado' : 'Perdido';
+        }
+
+        const scoreParts = [];
+        if (p.set1_a != null && p.set1_b != null) scoreParts.push(p.set1_a + ' - ' + p.set1_b);
+        if (p.set2_a != null && p.set2_b != null) scoreParts.push(p.set2_a + ' - ' + p.set2_b);
+        if (p.supertiebreak_a != null && p.supertiebreak_b != null) scoreParts.push('(' + p.supertiebreak_a + ' - ' + p.supertiebreak_b + ')');
+        const scoreStr = scoreParts.join('  ');
+
+        const catTxt = formatCategoria(p.categoria || '');
+        let headerLine = catTxt;
+        if (jornadaNum != null) headerLine += ' · Jornada ' + jornadaNum;
+        if (fuente === 'semifinal') headerLine = 'Semifinal ' + headerLine;
+        else if (fuente === 'final') headerLine = 'Final ' + headerLine;
+
+        return '<div class="partido-card">' +
+            '<div class="partido-header">' +
+                '<span>' + esc(headerLine) + '</span>' +
+                '<span class="partido-result ' + resultClass + '">' + esc(resultText) + '</span>' +
+            '</div>' +
+            (scoreStr ? '<div class="partido-score">' + esc(scoreStr) + '</div>' : '') +
+            '<div class="partido-meta"><span>Con:</span> ' + esc(pareja) + '</div>' +
+            '<div class="partido-meta"><span>vs:</span> ' + esc(oponente) + '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _jugadorNombreBasico(jugId) {
+    if (!jugId) return '';
+    const j = allJugadores.find(x => x.id === jugId);
+    return j ? esc(shortName(j)) : '';
+}
+
 function renderEquipos() {
     const el = document.getElementById('equipos');
     if (!allEquipos.length) {
         el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>Aún no hay equipos configurados</p></div>';
         return;
     }
-    let html = '';
+    let html = '<div class="equipos-list">';
     allEquipos.forEach(eq => {
         if (!eq.activo) return;
         const jugadoresEq = allJugadores.filter(j => j.equipo_id === eq.id);
-        html += `
-            <div class="card" style="margin-bottom:0.75rem;border-left:4px solid ${esc(eq.color || '#888')};padding:1rem;">
-                <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
-                    <span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:${esc(eq.color || '#888')};"></span>
-                    <span style="font-family:Lexend;font-weight:600;font-size:1.1rem;">${esc(eq.nombre)}</span>
-                </div>
-                <div style="font-size:0.82rem;color:var(--on-surface-variant-40);margin-bottom:0.5rem;">
-                    ${jugadoresEq.length} jugador${jugadoresEq.length !== 1 ? 'es' : ''}
-                </div>
-                ${jugadoresEq.length ? `
-                    <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
-                        ${jugadoresEq.map(j => '<span class="badge" style="background:var(--white-8);color:var(--on-surface);">' + esc(shortName(j)) + '</span>').join('')}
-                    </div>
-                ` : '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>'}
-            </div>
-        `;
+        const isOpen = _openEquipoId === eq.id;
+        const jugadoresHtml = jugadoresEq.length
+            ? jugadoresEq.map(j => {
+                const jOpen = _openJugadorId === j.id;
+                const partidosHtml = _renderJugadorPartidos(j.id, eq.id);
+                return '<div class="jugador-card' + (jOpen ? ' open' : '') + '" data-jug-id="' + j.id + '">' +
+                    '<div class="jugador-header">' +
+                        '<span class="jugador-name">' + esc(shortName(j)) + '</span>' +
+                        '<span class="material-symbols-outlined jugador-chev">expand_more</span>' +
+                    '</div>' +
+                    '<div class="jugador-meta">' +
+                        (j.categoria ? '<span class="badge" style="background:var(--primary-12);color:var(--primary);font-size:0.6rem;">' + esc(j.categoria) + '</span>' : '') +
+                        (j.email ? ' · ' + esc(j.email) : '') +
+                    '</div>' +
+                    '<div class="jugador-body">' + partidosHtml + '</div>' +
+                '</div>';
+            }).join('')
+            : '<div class="sin-partidos">Sin jugadores asignados</div>';
+
+        html += '<div class="card-equipos' + (isOpen ? ' open' : '') + '" data-eq-id="' + eq.id + '">' +
+            '<div class="equipo-header">' +
+                '<span class="equipo-dot" style="background:' + esc(eq.color || '#888') + ';"></span>' +
+                '<span class="equipo-title">' + esc(eq.nombre) + '</span>' +
+                '<span class="equipo-count">' + jugadoresEq.length + '</span>' +
+                '<span class="material-symbols-outlined chev">expand_more</span>' +
+            '</div>' +
+            '<div class="equipo-body">' + jugadoresHtml + '</div>' +
+        '</div>';
     });
+    html += '</div>';
     el.innerHTML = html || '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>No hay equipos activos</p></div>';
+
+    el.querySelectorAll('.card-equipos').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.jugador-card')) return;
+            const id = card.dataset.eqId;
+            _openEquipoId = (_openEquipoId === id) ? null : id;
+            _openJugadorId = null;
+            renderEquipos();
+        });
+    });
+
+    el.querySelectorAll('.jugador-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            const id = card.dataset.jugId;
+            _openJugadorId = (_openJugadorId === id) ? null : id;
+            renderEquipos();
+        });
+    });
 }
 
 // ── Tab Switching ──
 function _renderTab(tabId) {
     document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.quick-access-footer button').forEach(b => b.classList.remove('active'));
     const tabBtn = document.querySelector('[data-tab="' + tabId + '"]');
     if (tabBtn) tabBtn.classList.add('active');
+    const footerBtn = document.querySelector('.quick-access-footer [data-footer-tab="' + tabId + '"]');
+    if (footerBtn) footerBtn.classList.add('active');
     const content = document.getElementById(tabId);
     if (content) content.classList.add('active');
     switch (tabId) {
         case 'inicio': renderInicio(); break;
-        case 'equipos': renderEquipos(); break;
+        case 'equipos':
+            if (_dataLoaded) {
+                renderEquipos();
+            } else {
+                const el = document.getElementById('equipos');
+                if (el) el.innerHTML = loadingHTML;
+                window.addEventListener('appDataLoaded', () => renderEquipos(), { once: true });
+            }
+            break;
         case 'posiciones': renderPosiciones(); break;
         case 'resultados': renderResultados(); break;
         case 'jornadas': renderJornadas(); break;
@@ -631,7 +806,7 @@ async function init() {
         await loadTournamentList();
         initPublicTournamentSelector();
         updatePublicTournamentSelector();
-        const initialTab = location.hash.replace('#', '') || 'inicio';
+        const initialTab = location.hash.replace('#', '') || 'posiciones';
         history.replaceState({ tab: initialTab }, '', '#' + initialTab);
         _renderTab(initialTab);
         setupTabScroll();

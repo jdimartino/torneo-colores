@@ -25,7 +25,7 @@
     <meta http-equiv="Expires" content="0">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304132b'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial,sans-serif' font-weight='bold' font-size='16' fill='%233fff8b'%3ETC%3C/text%3E%3C/svg%3E">
     <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304132b'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial,sans-serif' font-weight='bold' font-size='16' fill='%233fff8b'%3ETC%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="css/styles.css?v=9">
+    <link rel="stylesheet" href="css/styles.css?v=10">
 </head>
 <body>
 
@@ -52,17 +52,17 @@
     </div>
     <div class="tab-nav-wrap">
         <nav class="tab-nav">
-            <button data-tab="inicio" class="active" onclick="showTab('inicio')">
-                <span class="material-symbols-outlined" style="font-size:1rem;">home</span> Inicio
+            <button data-tab="posiciones" class="active" onclick="showTab('posiciones')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">leaderboard</span> Posiciones
             </button>
             <button data-tab="equipos" onclick="showTab('equipos')">
                 <span class="material-symbols-outlined" style="font-size:1rem;">groups</span> Equipos
             </button>
-            <button data-tab="posiciones" onclick="showTab('posiciones')">
-                <span class="material-symbols-outlined" style="font-size:1rem;">leaderboard</span> Posiciones
-            </button>
             <button data-tab="resultados" onclick="showTab('resultados')">
                 <span class="material-symbols-outlined" style="font-size:1rem;">history</span> Resultados
+            </button>
+            <button data-tab="jornadas" onclick="showTab('jornadas')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">event</span> Journdas
             </button>
             <button data-tab="semifinales" onclick="showTab('semifinales')">
                 <span class="material-symbols-outlined" style="font-size:1rem;">emoji_events</span> Semifinales
@@ -70,8 +70,8 @@
             <button data-tab="final" onclick="showTab('final')">
                 <span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Final
             </button>
-            <button data-tab="jornadas" onclick="showTab('jornadas')">
-                <span class="material-symbols-outlined" style="font-size:1rem;">event</span> Jornadas
+            <button data-tab="inicio" onclick="showTab('inicio')">
+                <span class="material-symbols-outlined" style="font-size:1rem;">home</span> Info
             </button>
         </nav>
         <button class="tab-scroll-btn" aria-label="Más pestañas">
@@ -81,20 +81,51 @@
 </header>
 
 <main id="app">
-    <section id="inicio" class="tab-content active"></section>
+    <section id="posiciones" class="tab-content active"></section>
     <section id="equipos" class="tab-content"></section>
-    <section id="posiciones" class="tab-content"></section>
     <section id="resultados" class="tab-content"></section>
+    <section id="jornadas" class="tab-content"></section>
     <section id="semifinales" class="tab-content"></section>
     <section id="final" class="tab-content"></section>
-    <section id="jornadas" class="tab-content"></section>
+    <section id="inicio" class="tab-content"></section>
 </main>
 
 <footer class="app-footer">
     <p>Desarrollado por JDM Services Systems</p>
 </footer>
 
-<script type="module" src="js/app.js?v=8"></script>
+<nav class="quick-access-footer">
+    <button class="active" data-footer-tab="posiciones" onclick="showTab('posiciones')">
+        <span class="material-symbols-outlined">leaderboard</span>
+        <span>Posiciones</span>
+    </button>
+    <button data-footer-tab="equipos" onclick="showTab('equipos')">
+        <span class="material-symbols-outlined">groups</span>
+        <span>Equipos</span>
+    </button>
+    <button data-footer-tab="resultados" onclick="showTab('resultados')">
+        <span class="material-symbols-outlined">history</span>
+        <span>Resultados</span>
+    </button>
+    <button data-footer-tab="jornadas" onclick="showTab('jornadas')">
+        <span class="material-symbols-outlined">event</span>
+        <span>Jornadas</span>
+    </button>
+    <button data-footer-tab="semifinales" onclick="showTab('semifinales')">
+        <span class="material-symbols-outlined">emoji_events</span>
+        <span>Semi</span>
+    </button>
+    <button data-footer-tab="final" onclick="showTab('final')">
+        <span class="material-symbols-outlined">workspace_premium</span>
+        <span>Final</span>
+    </button>
+    <button data-footer-tab="inicio" onclick="showTab('inicio')">
+        <span class="material-symbols-outlined">home</span>
+        <span>Info</span>
+    </button>
+</nav>
+
+<script type="module" src="js/app.js?v=13"></script>
 
 </body>
 </html>

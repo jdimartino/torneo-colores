@@ -1,0 +1,24 @@
+{
+  "name": "Torneo de Colores",
+  "short_name": "Torneo Colores",
+  "description": "Torneo de tenis amateur con formato Round Robin. Posiciones, resultados, jornadas, semifinales y final en vivo.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04132b",
+  "theme_color": "#1976d2",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
