@@ -54,8 +54,8 @@ public/
 - Se genera manualmente en cada entorno
 
 ### Firebase
-- Proyecto: `tucanapp-pos`
-- Hosting: 2 sites (`tucanapp-pos` y `jdm-pos-app`)
+- Proyecto: `torneos-tenis-jdm`
+- Hosting: 1 site (`torneos-tenis-jdm`)
 - Firestore: estructura `torneos/{id}/jugadores`, `torneos/{id}/equipos`, etc.
 
 ### CSS
