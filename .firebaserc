@@ -1,15 +1,12 @@
 {
   "projects": {
-    "default": "tucanapp-pos"
+    "default": "torneos-tenis-jdm"
   },
   "targets": {
-    "tucanapp-pos": {
+    "torneos-tenis-jdm": {
       "hosting": {
-        "tucanapp-pos": [
-          "tucanapp-pos"
-        ],
-        "jdm-pos-app": [
-          "jdm-pos-app"
+        "torneos-tenis-jdm": [
+          "torneos-tenis-jdm"
         ]
       }
     }

@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ============================================
-    // FUNCIONES DE ROL (Torneo de Colores)
+    // FUNCIONES DE ROL
     // ============================================
 
     function isAuthenticated() {
@@ -55,51 +55,7 @@ service cloud.firestore {
     }
 
     // ============================================
-    // JDM-POS: ACCESO ABIERTO (sin auth)
-    // ============================================
-
-    match /customers/{customerId} {
-      allow read, write: if true;
-    }
-
-    match /orders/{orderId} {
-      allow read, write: if true;
-
-      match /items/{itemId} {
-        allow read, write: if true;
-      }
-
-      match /payments/{paymentId} {
-        allow read, write: if true;
-      }
-    }
-
-    match /products/{productId} {
-      allow read, write: if true;
-    }
-
-    match /categories/{categoryId} {
-      allow read, write: if true;
-    }
-
-    match /sessions/{sessionId} {
-      allow read, write: if true;
-    }
-
-    match /abonos/{abonoId} {
-      allow read, write: if true;
-    }
-
-    match /settings/{settingId} {
-      allow read, write: if true;
-    }
-
-    match /counters/{counterId} {
-      allow read, write: if true;
-    }
-
-    // ============================================
-    // TORNEO DE COLORES: REGLAS CON ROL
+    // COLECCIÓN USUARIOS
     // ============================================
 
     match /usuarios/{userId} {
@@ -113,34 +69,47 @@ service cloud.firestore {
       );
     }
 
+    // ============================================
+    // COLECCIÓN CONFIG
+    // ============================================
+
     match /config/{docId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
+    // ============================================
+    // COLECCIÓN TORNEOS
+    // ============================================
+
     match /torneos/{tournamentId} {
       allow read: if true;
       allow write: if isAdmin();
 
+      // Equipos
       match /equipos/{equipoId} {
         allow read: if true;
         allow write: if isAdmin();
       }
 
+      // Jugadores
       match /jugadores/{jugadorId} {
         allow read: if true;
         allow write: if isAdmin();
       }
 
+      // Jornadas
       match /jornadas/{jornadaId} {
         allow read: if true;
         allow write: if isAdmin();
 
+        // Enfrentamientos
         match /enfrentamientos/{enfId} {
           allow read: if true;
           allow write: if isAdmin();
         }
 
+        // Partidos
         match /partidos/{partidoId} {
           allow read: if true;
           allow write: if isAdmin();
@@ -148,6 +117,7 @@ service cloud.firestore {
         }
       }
 
+      // Semifinales
       match /semifinales/{semiId} {
         allow read: if true;
         allow write: if isAdmin();
@@ -159,6 +129,7 @@ service cloud.firestore {
         }
       }
 
+      // Finales
       match /finales/{finalId} {
         allow read: if true;
         allow write: if isAdmin();
@@ -170,11 +141,13 @@ service cloud.firestore {
         }
       }
 
+      // Finanzas
       match /finanzas/{movimientoId} {
         allow read: if true;
         allow write: if isAdmin();
       }
 
+      // Configuración
       match /configuracion/{configId} {
         allow read: if true;
         allow write: if isAdmin();
