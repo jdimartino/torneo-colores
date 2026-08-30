@@ -2,12 +2,12 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDXFRqwIvL2GYRC24abE-ovTxepCsX8p1o",
-  authDomain: "tucanapp-pos.firebaseapp.com",
-  projectId: "tucanapp-pos",
-  storageBucket: "tucanapp-pos.firebasestorage.app",
-  messagingSenderId: "833846886165",
-  appId: "1:833846886165:web:28746819de42fbddd1331c"
+  apiKey: "AIzaSyAvU8uKaivoZH_401zpXyM5-OOGgi5OGcw",
+  authDomain: "torneos-tenis-jdm.firebaseapp.com",
+  projectId: "torneos-tenis-jdm",
+  storageBucket: "torneos-tenis-jdm.firebasestorage.app",
+  messagingSenderId: "951550758841",
+  appId: "1:951550758841:web:b4baab45dde503d0717068"
 };
 
 const app = initializeApp(firebaseConfig);
