@@ -122,15 +122,34 @@ export async function renderTournamentPanel() {
     </div>`;
 
     if (active && activeId) {
+        const bc = getBracketConfig();
+        const currentName = active.name || active.nombre || '';
         html += `
         <div class="admin-section-title">
-            <span class="material-symbols-outlined" style="font-size:0.9rem;">settings</span> Configuración del Torneo
+            <span class="material-symbols-outlined" style="font-size:0.9rem;">settings</span> Configuración del Torneo Activo
         </div>
         <div class="card">
             <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.75rem;">
                 <span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--primary);">tune</span>
-                <span style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--on-surface);">${esc(active.name)}</span>
+                <span style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--on-surface);">${esc(currentName)}</span>
             </div>
+
+            <div class="form-group" style="margin-bottom:0.75rem;">
+                <label>Nombre del Torneo</label>
+                <input type="text" id="cfg-t-name" value="${esc(currentName)}" placeholder="Nombre del torneo">
+            </div>
+
+            <div class="form-group" style="margin-bottom:0.75rem;">
+                <label>Formato de Clasificación a Fase Final</label>
+                <select id="cfg-t-bracket" style="width:100%;padding:0.5rem;border-radius:6px;background:var(--white-5);color:var(--on-surface);border:1px solid var(--white-10);">
+                    <option value="4" ${bc.clasificados === 4 ? 'selected' : ''}>4 Equipos (Semifinales: 1º vs 4º y 2º vs 3º)</option>
+                    <option value="2" ${bc.clasificados === 2 ? 'selected' : ''}>2 Equipos (Final Directa: 1º vs 2º)</option>
+                </select>
+            </div>
+
+            <button class="btn btn-primary" id="btn-save-tournament-config" style="width:100%;margin-top:0.4rem;">
+                <span class="material-symbols-outlined" style="font-size:1rem;">save</span> Guardar Configuración
+            </button>
         </div>`;
     }
 
@@ -149,7 +168,7 @@ export async function renderTournamentPanel() {
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
                         <div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--on-surface);">
-                            ${esc(t.name)} ${isCurrent ? '← viendo' : ''}
+                            ${esc(t.name || t.nombre)} ${isCurrent ? '← viendo' : ''}
                         </div>
                         <div style="font-size:0.65rem;color:var(--on-surface-variant-40);margin-top:0.15rem;">
                             <span class="badge badge-success">Activo</span>
@@ -176,7 +195,7 @@ export async function renderTournamentPanel() {
             <div class="card" style="opacity:0.6;">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
-                        <div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--on-surface);">${esc(t.name)}</div>
+                        <div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--on-surface);">${esc(t.name || t.nombre)}</div>
                         <div style="font-size:0.65rem;color:var(--on-surface-variant-40);margin-top:0.15rem;">
                             <span class="badge">Cerrado</span>
                         </div>
@@ -191,19 +210,47 @@ export async function renderTournamentPanel() {
 
     panel.innerHTML = html;
 
-    document.getElementById('btn-create-tournament')?.addEventListener('click', async () => {
-        const name = document.getElementById('t-name').value.trim();
-        if (!name) { toast('Ingresá un nombre', 'error'); return; }
-        showLoading('Creando torneo...');
+    document.getElementById('btn-save-tournament-config')?.addEventListener('click', async () => {
+        const newName = document.getElementById('cfg-t-name')?.value.trim();
+        const clasificados = parseInt(document.getElementById('cfg-t-bracket')?.value || '4', 10);
+        if (!newName) {
+            if (typeof window.toast === 'function') window.toast('Ingresá un nombre para el torneo', 'error');
+            return;
+        }
+        if (typeof window.showLoading === 'function') window.showLoading('Guardando configuración...');
         try {
-            await createTournament(name);
-            toast('Torneo creado', 'success');
-            await refreshData();
+            await updateDoc(torneoRef(activeId), {
+                name: newName,
+                nombre: newName,
+                bracketConfig: { clasificados, rondas: clasificados === 4 ? 2 : 1 }
+            });
+            await updateBracketConfig({ clasificados, rondas: clasificados === 4 ? 2 : 1 });
+            if (typeof window.toast === 'function') window.toast('Configuración del torneo guardada', 'success');
+            if (typeof window.refreshData === 'function') await window.refreshData();
         } catch (e) {
-            toast('Error al crear torneo', 'error');
+            if (typeof window.toast === 'function') window.toast('Error al guardar configuración', 'error');
             console.error(e);
         } finally {
-            hideLoading();
+            if (typeof window.hideLoading === 'function') window.hideLoading();
+        }
+    });
+
+    document.getElementById('btn-create-tournament')?.addEventListener('click', async () => {
+        const name = document.getElementById('t-name').value.trim();
+        if (!name) {
+            if (typeof window.toast === 'function') window.toast('Ingresá un nombre', 'error');
+            return;
+        }
+        if (typeof window.showLoading === 'function') window.showLoading('Creando torneo...');
+        try {
+            await createTournament(name);
+            if (typeof window.toast === 'function') window.toast('Torneo creado', 'success');
+            if (typeof window.refreshData === 'function') await window.refreshData();
+        } catch (e) {
+            if (typeof window.toast === 'function') window.toast('Error al crear torneo', 'error');
+            console.error(e);
+        } finally {
+            if (typeof window.hideLoading === 'function') window.hideLoading();
         }
     });
 

@@ -829,8 +829,119 @@ async function renderAdministracion() {
     html += renderFinanceFiltros();
     html += renderFinanceMovimientos(movimientos);
 
+    // Mantenimiento y Reinicio de Marcadores
+    html += '<div class="card" style="margin-top:1.5rem;border-left:4px solid var(--warning);">' +
+        '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;color:var(--warning);">' +
+        '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">restart_alt</span> Reiniciar Marcadores del Torneo</div>' +
+        '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);margin-bottom:0.75rem;">' +
+        'Borra todos los marcadores de prueba, resultados del Round Robin, Semifinales y Finales. <strong>Conserva todos los jugadores, equipos y registros financieros/administrativos intactos.</strong></div>' +
+        '<button class="btn btn-warning" id="btn-reset-tournament-scores" style="width:100%;"><span class="material-symbols-outlined" style="font-size:1rem;">restart_alt</span> Reiniciar Marcadores a Cero</button>' +
+        '</div>';
+
     panel.innerHTML = html;
+    document.getElementById('btn-reset-tournament-scores')?.addEventListener('click', () => safeAction(resetTournamentScores));
 }
+
+async function resetTournamentScores() {
+    const tid = getActiveTournamentId();
+    if (!tid) {
+        toast('No hay un torneo activo seleccionado', 'error');
+        return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+        '<div class="modal">' +
+        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;color:var(--error);">⚠️ Confirmar Reinicio a Cero</h3>' +
+        '<div style="font-size:0.8rem;margin-bottom:1rem;line-height:1.4;">' +
+        '<p style="margin-bottom:0.5rem;">Esta acción eliminará:</p>' +
+        '<ul style="margin-left:1rem;margin-bottom:0.5rem;color:var(--error);">' +
+        '<li>Todos los marcadores y resultados de prueba en los partidos.</li>' +
+        '<li>Las Semifinales y Finales generadas.</li>' +
+        '</ul>' +
+        '<p style="color:var(--secondary);font-weight:600;">Se conservarán intactos:</p>' +
+        '<ul style="margin-left:1rem;color:var(--secondary);">' +
+        '<li>Todos los jugadores ingresados y sus equipos asignados.</li>' +
+        '<li>Toda la configuración y los registros financieros/administrativos.</li>' +
+        '</ul>' +
+        '</div>' +
+        '<div class="btn-group" style="justify-content:flex-end;">' +
+        '<button class="btn btn-outline" id="btn-cancel-reset">Cancelar</button>' +
+        '<button class="btn btn-danger" id="btn-confirm-reset"><span class="material-symbols-outlined" style="font-size:0.9rem;">restart_alt</span> Sí, Reiniciar Marcadores</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('btn-cancel-reset').addEventListener('click', () => overlay.remove());
+    document.getElementById('btn-confirm-reset').addEventListener('click', async () => {
+        overlay.remove();
+        showLoading('Reiniciando torneo a cero...');
+        try {
+            await doResetTournamentScores(tid);
+            toast('Torneo reiniciado exitosamente. ¡Listo para el sábado!', 'success');
+            await refreshData();
+        } catch (e) {
+            toast('Error al reiniciar torneo', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    });
+}
+
+async function doResetTournamentScores(tid) {
+    // 1. Reset partidos in all jornadas
+    const jornSnap = await getDocs(collection(db, 'torneos', tid, 'jornadas'));
+    for (const jornDoc of jornSnap.docs) {
+        await updateDoc(doc(db, 'torneos', tid, 'jornadas', jornDoc.id), { cerrada: false });
+
+        const partSnap = await getDocs(collection(db, 'torneos', tid, 'jornadas', jornDoc.id, 'partidos'));
+        for (const partDoc of partSnap.docs) {
+            await updateDoc(doc(db, 'torneos', tid, 'jornadas', jornDoc.id, 'partidos', partDoc.id), {
+                set1_a: null, set1_b: null,
+                set2_a: null, set2_b: null,
+                tiebreak1_a: null, tiebreak1_b: null,
+                tiebreak2_a: null, tiebreak2_b: null,
+                supertiebreak_a: null, supertiebreak_b: null,
+                games_a: 0, games_b: 0,
+                ganador_equipo_id: null,
+                estado: 'pendiente',
+                borrador: null,
+                fecha_resultado: null,
+                puntos_aplicados: false
+            });
+        }
+    }
+
+    // 2. Delete all semifinal docs and subcollection partidos
+    const semiSnap = await getDocs(collection(db, 'torneos', tid, 'semifinales'));
+    for (const semiDoc of semiSnap.docs) {
+        const pSnap = await getDocs(collection(db, 'torneos', tid, 'semifinales', semiDoc.id, 'partidos'));
+        for (const pDoc of pSnap.docs) {
+            await deleteDoc(doc(db, 'torneos', tid, 'semifinales', semiDoc.id, 'partidos', pDoc.id));
+        }
+        await deleteDoc(doc(db, 'torneos', tid, 'semifinales', semiDoc.id));
+    }
+
+    // 3. Delete all final docs and subcollection partidos
+    const finalSnap = await getDocs(collection(db, 'torneos', tid, 'finales'));
+    for (const finDoc of finalSnap.docs) {
+        const pSnap = await getDocs(collection(db, 'torneos', tid, 'finales', finDoc.id, 'partidos'));
+        for (const pDoc of pSnap.docs) {
+            await deleteDoc(doc(db, 'torneos', tid, 'finales', finDoc.id, 'partidos', pDoc.id));
+        }
+        await deleteDoc(doc(db, 'torneos', tid, 'finales', finDoc.id));
+    }
+
+    allSemifinales = [];
+    allFinales = [];
+    selectedSemifinalId = null;
+    selectedFinalId = null;
+}
+
+window.resetTournamentScores = resetTournamentScores;
+
 
 // ── Auth ──
 let currentAdminUids = [];
@@ -1007,6 +1118,7 @@ function _switchPanel(panelId) {
     if (btn) btn.classList.add('active');
     const content = document.getElementById('panel-' + panelId);
     if (content) content.classList.add('active');
+    if (panelId === 'resultados') resDataKey = null;
     if (!dataLoaded) return;
     renderPanel(panelId);
 }
@@ -1783,6 +1895,7 @@ async function confirmCSVImport(nuevos, existentes) {
         // Process existing players - update non-payment fields always, payment fields only if not protected
         existentes.forEach(existing => {
             const ref = docRef('jugadores', existing.id);
+            const currentData = allJugadores.find(j => j.id === existing.id);
             const updateData = {
                 // Always update non-payment fields from CSV
                 nombre: existing.nombre,
@@ -1791,13 +1904,13 @@ async function confirmCSVImport(nuevos, existentes) {
                 categoria: existing.categoria || '',
                 telefono: existing.telefono,
                 email: existing.email,
-                equipo_id: null,
+                equipo_id: currentData?.equipo_id || null,
                 numero_socio: existing.numero_socio || '',
                 status_socio: existing.status_socio || ''
             };
             
             // Only update payment fields if not protected
-            if (!existing.payment_protected) {
+            if (!currentData?.payment_protected) {
                 updateData.metodo_pago = existing.metodo_pago || '';
                 updateData.fecha_pago = existing.fecha_pago || '';
                 updateData.numero_operacion = existing.numero_operacion || '';
@@ -2825,16 +2938,85 @@ function determineMatchWinner(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, 
 function calculateGames(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, stbB) {
     const s1l = parseInt(s1A) || 0, s1v = parseInt(s1B) || 0;
     const s2l = parseInt(s2A) || 0, s2v = parseInt(s2B) || 0;
-    const tb1l = parseInt(tb1A) || 0, tb1v = parseInt(tb1B) || 0;
-    const tb2l = parseInt(tb2A) || 0, tb2v = parseInt(tb2B) || 0;
+    const tb1l = parseInt(tb1A), tb1v = parseInt(tb1B);
+    const tb2l = parseInt(tb2A), tb2v = parseInt(tb2B);
     const stbl = parseInt(stbA) || 0, stbv = parseInt(stbB) || 0;
+
+    let set1_a = s1l, set1_b = s1v;
+    let set2_a = s2l, set2_b = s2v;
+
+    if (s1l === 4 && s1v === 4 && !isNaN(tb1l) && !isNaN(tb1v)) {
+        if (tb1l > tb1v) { set1_a = 5; set1_b = 4; }
+        else if (tb1v > tb1l) { set1_a = 4; set1_b = 5; }
+    }
+    if (s2l === 4 && s2v === 4 && !isNaN(tb2l) && !isNaN(tb2v)) {
+        if (tb2l > tb2v) { set2_a = 5; set2_b = 4; }
+        else if (tb2v > tb2l) { set2_a = 4; set2_b = 5; }
+    }
+
     return {
-        games_a: s1l + s2l + tb1l + tb2l,
-        games_b: s1v + s2v + tb1v + tb2v,
+        games_a: set1_a + set2_a,
+        games_b: set1_b + set2_b,
         stb_a: stbl,
         stb_b: stbv
     };
 }
+
+// ── Recalculate Games Migration ──
+async function recalculateAllGames() {
+    const tid = getActiveTournamentId();
+    if (!tid) { toast('No hay torneo activo', 'error'); return; }
+
+    let totalFixed = 0, totalSkipped = 0;
+
+    function recalc(p) {
+        const s1l = parseInt(p.set1_a) || 0, s1v = parseInt(p.set1_b) || 0;
+        const s2l = parseInt(p.set2_a) || 0, s2v = parseInt(p.set2_b) || 0;
+        const tb1l = parseInt(p.tiebreak1_a), tb1v = parseInt(p.tiebreak1_b);
+        const tb2l = parseInt(p.tiebreak2_a), tb2v = parseInt(p.tiebreak2_b);
+        let set1_a = s1l, set1_b = s1v, set2_a = s2l, set2_b = s2v;
+        if (s1l === 4 && s1v === 4 && !isNaN(tb1l) && !isNaN(tb1v)) {
+            if (tb1l > tb1v) { set1_a = 5; set1_b = 4; }
+            else if (tb1v > tb1l) { set1_a = 4; set1_b = 5; }
+        }
+        if (s2l === 4 && s2v === 4 && !isNaN(tb2l) && !isNaN(tb2v)) {
+            if (tb2l > tb2v) { set2_a = 5; set2_b = 4; }
+            else if (tb2v > tb2l) { set2_a = 4; set2_b = 5; }
+        }
+        return { games_a: set1_a + set2_a, games_b: set1_b + set2_b };
+    }
+
+    async function fixCollection(path) {
+        const snap = await getDocs(collection(db, path));
+        for (const d of snap.docs) {
+            if (d.id === 'partidos' || d.id === 'semifinales' || d.id === 'finales') continue;
+            const subSnap = await getDocs(collection(db, path, d.id, 'partidos'));
+            for (const pDoc of subSnap.docs) {
+                const p = pDoc.data();
+                if (p.estado !== 'finalizado') { totalSkipped++; continue; }
+                const ng = recalc(p);
+                if (ng.games_a !== (parseInt(p.games_a) || 0) || ng.games_b !== (parseInt(p.games_b) || 0)) {
+                    await updateDoc(doc(db, path, d.id, 'partidos', pDoc.id), { games_a: ng.games_a, games_b: ng.games_b });
+                    totalFixed++;
+                } else { totalSkipped++; }
+            }
+        }
+    }
+
+    showLoading('Recalculando juegos...');
+    try {
+        await fixCollection('torneos/' + tid + '/jornadas');
+        await fixCollection('torneos/' + tid + '/semifinales');
+        await fixCollection('torneos/' + tid + '/finales');
+        toast('Juegos recalculados: ' + totalFixed + ' corregidos, ' + totalSkipped + ' sin cambios', 'success');
+    } catch (e) {
+        console.error(e);
+        toast('Error al recalcular: ' + e.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+window.recalculateAllGames = recalculateAllGames;
 
 // ── Firestore Helpers ──
 function resPartidoCol(jornadaId) {
@@ -2843,6 +3025,19 @@ function resPartidoCol(jornadaId) {
 
 function resPartidoDocRef(jornadaId, partidoId) {
     return doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos', partidoId);
+}
+
+function getResPartidoDocRef(partido) {
+    const id = partido.id;
+    const cid = partido._resContainerId || partido._resJornadaId;
+    const type = partido._resContainerType || 'jornada';
+    if (type === 'semifinal') {
+        return doc(db, 'torneos', getActiveTournamentId(), 'semifinales', cid, 'partidos', id);
+    }
+    if (type === 'final') {
+        return doc(db, 'torneos', getActiveTournamentId(), 'finales', cid, 'partidos', id);
+    }
+    return resPartidoDocRef(cid, id);
 }
 
 function equipoRef(equipoId) {
@@ -2856,7 +3051,7 @@ async function ensureResData() {
     resDataKey = key;
     resPartidos = [];
     const loaded = [];
-    for (const j of allJornadas) {
+    await Promise.all(allJornadas.map(async j => {
         try {
             const snap = await getDocs(resPartidoCol(j.id));
             snap.docs.forEach(d => {
@@ -2871,7 +3066,7 @@ async function ensureResData() {
         } catch (e) {
             console.error('Error loading res partidos jornada ' + j.id, e);
         }
-    }
+    }));
     resPartidos = loaded;
     buildResultScores();
 }
@@ -2940,7 +3135,7 @@ async function persistDraft(partidoId) {
     const rs = resultScores[partidoId];
     if (!rs) return;
     try {
-        await updateDoc(resPartidoDocRef(p._resJornadaId, partidoId), {
+        await updateDoc(getResPartidoDocRef(p), {
             borrador: {
                 set1_a: rs.set1_a, set1_b: rs.set1_b,
                 set2_a: rs.set2_a, set2_b: rs.set2_b,
@@ -2967,15 +3162,26 @@ function flushDrafts() {
 async function applyMatchPoints(jornadaId, partidoId) {
     const partido = resPartidos.find(p => p.id === partidoId);
     if (!partido || partido.estado !== 'finalizado') return;
-    await updateDoc(resPartidoDocRef(jornadaId, partidoId), { puntos_aplicados: true });
+    await updateDoc(getResPartidoDocRef(partido), { puntos_aplicados: true });
+}
+
+function syncPartidoResult(partidoId, updatedPartido) {
+    const sp = semiPartidos.find(p => p.id === partidoId);
+    if (sp) {
+        Object.assign(sp, updatedPartido);
+    }
+    const fp = finalPartidos.find(p => p.id === partidoId);
+    if (fp) {
+        Object.assign(fp, updatedPartido);
+    }
 }
 
 // ── Save Resultado ──
 async function saveResultado(partidoId) {
     const partido = resPartidos.find(x => x.id === partidoId);
     if (!partido) return;
-    const jornadaId = partido._resJornadaId;
-    if (!jornadaId || !partidoId) return;
+    const docRef = getResPartidoDocRef(partido);
+    if (!docRef) return;
 
     const rs = resultScores[partidoId];
     if (!rs) return;
@@ -3008,7 +3214,7 @@ async function saveResultado(partidoId) {
 
     showLoading('Guardando resultado...');
     try {
-        await updateDoc(resPartidoDocRef(jornadaId, partidoId), {
+        await updateDoc(getResPartidoDocRef(partido), {
             set1_a: s1l,
             set1_b: s1v,
             set2_a: s2l,
@@ -3041,6 +3247,8 @@ async function saveResultado(partidoId) {
             partido.ganador_equipo_id = ganadorEquipoId;
             partido.games_a = games.games_a; partido.games_b = games.games_b;
             partido.borrador = null;
+            // Sync back to semi/final container arrays
+            syncPartidoResult(partidoId, partido);
         }
         resultScores[partidoId] = {
             set1_a: s1l, set1_b: s1v,
@@ -3050,8 +3258,11 @@ async function saveResultado(partidoId) {
             stb_a: stbl, stb_b: stbv,
             _closed: { set1: true, set2: true, tb1: true, tb2: true, stb: true }
         };
-        await applyMatchPoints(jornadaId, partidoId);
-        renderResultados();
+        await applyMatchPoints(partidoId);
+        const fp = resPartidos.find(x => x.id === partidoId);
+        if (fp?._resContainerType === 'semifinal') renderSemifinalDetail();
+        else if (fp?._resContainerType === 'final') renderFinalDetail();
+        else renderResultados();
     } catch (e) {
         toast('Error al guardar resultado', 'error');
         console.error(e);
@@ -3064,15 +3275,13 @@ async function saveResultado(partidoId) {
 async function clearResultado(partidoId) {
     const partido = resPartidos.find(p => p.id === partidoId);
     if (!partido) return;
-    const jornadaId = partido._resJornadaId;
-    if (!jornadaId || !partidoId) return;
     if (partido.estado !== 'finalizado') return;
 
     if (!confirm('¿Borrar este resultado?')) return;
 
     showLoading('Borrando resultado...');
     try {
-        await updateDoc(resPartidoDocRef(jornadaId, partidoId), {
+        await updateDoc(getResPartidoDocRef(partido), {
             set1_a: null,
             set1_b: null,
             set2_a: null,
@@ -3104,6 +3313,7 @@ async function clearResultado(partidoId) {
             partido.ganador_equipo_id = null;
             partido.games_a = 0; partido.games_b = 0;
             partido.borrador = null;
+            syncPartidoResult(partidoId, partido);
         }
         resultScores[partidoId] = {
             set1_a: 0, set1_b: 0,
@@ -3134,6 +3344,34 @@ function renderResultados() {
 
     if (resSelectedJornadaId) {
         renderResDetail(panel);
+        return;
+    }
+
+    if (resView === 'jornada' && !resSelectedJornadaId && allJornadas.length) {
+        let html = '';
+        html += resViewSwitchHtml();
+        html += '<div class="card">' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.75rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary);">sports_score</span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.9rem;">Seleccionar Jornada</span>' +
+            '</div>' +
+            '<div class="form-group"><label>Jornada</label>' +
+            '<select id="res-jornada-select">' +
+            '<option value="">— Seleccionar jornada —</option>' +
+            allJornadas.map(j => {
+                const teamAName2 = getTeamName(j.equipo_a_id) || '?';
+                const teamBName2 = getTeamName(j.equipo_b_id) || '?';
+                const cerradaLabel = j.cerrada ? ' [CERRADA]' : '';
+                return '<option value="' + j.id + '">Jornada ' + j.numero + ' — ' + esc(teamAName2) + ' VS ' + esc(teamBName2) + cerradaLabel + '</option>';
+            }).join('') +
+            '</select></div>' +
+            '</div>';
+        panel.innerHTML = html;
+        bindResPanelEvents(panel);
+        document.getElementById('res-jornada-select')?.addEventListener('change', (e) => {
+            resSelectedJornadaId = e.target.value || null;
+            if (resSelectedJornadaId) renderResultados();
+        });
         return;
     }
 
@@ -3209,16 +3447,63 @@ async function renderResEnCurso(panel) {
 
     groups.forEach(g => {
         const fechaStr = formatDate(g.j.fecha) || '';
-        html += '<div class="res-jornada-group">' +
-            '<div class="res-jornada-head"><span class="material-symbols-outlined" style="font-size:0.8rem;">event</span> Jornada ' + esc(String(g.j.numero)) +
-            (fechaStr ? ' · ' + esc(fechaStr) : '') + '</div>';
+        const isCerrada = g.j.cerrada === true;
+        const cerradaBadge = isCerrada
+            ? '<span style="font-size:0.65rem;background:rgba(0,212,170,0.15);color:var(--primary);padding:2px 8px;border-radius:10px;margin-left:0.4rem;">CERRADA</span>'
+            : '';
+        const cerrarBtn = isCerrada
+            ? '<button class="btn btn-sm btn-outline" onclick="editarJornada(\'' + g.j.id + '\')" title="Reabrir jornada" style="font-size:0.75rem;padding:0.3rem 0.6rem;margin-left:auto;"><span class="material-symbols-outlined" style="font-size:0.85rem;">edit</span> Editar</button>'
+            : '<button class="btn btn-sm btn-outline" onclick="cerrarJornada(\'' + g.j.id + '\')" title="Cerrar jornada" style="font-size:0.75rem;padding:0.3rem 0.6rem;margin-left:auto;"><span class="material-symbols-outlined" style="font-size:0.85rem;">lock</span> Cerrar</button>';
+
+        let summaryLine = '';
+        if (isCerrada) {
+            const teamAName = getTeamName(g.j.equipo_a_id) || '?';
+            const teamBName = getTeamName(g.j.equipo_b_id) || '?';
+            const teamAColor = getTeamColor(g.j.equipo_a_id) || '#4da6ff';
+            const teamBColor = getTeamColor(g.j.equipo_b_id) || '#feb300';
+            let aWins = 0, bWins = 0;
+            g.items.forEach(p => {
+                if (p.ganador_equipo_id === g.j.equipo_a_id) aWins++;
+                else if (p.ganador_equipo_id === g.j.equipo_b_id) bWins++;
+            });
+            let ganadorText = '';
+            if (aWins > bWins) {
+                ganadorText = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin:0 3px;"></span>' + esc(teamAName);
+            } else if (bWins > aWins) {
+                ganadorText = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin:0 3px;"></span>' + esc(teamBName);
+            } else {
+                ganadorText = 'Empate';
+            }
+            summaryLine = '<div style="font-size:0.75rem;color:var(--on-surface-variant-30);margin-top:0.3rem;">' +
+                '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin:0 2px;"></span>' + esc(teamAName) +
+                ' vs ' +
+                '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin:0 2px;"></span>' + esc(teamBName) +
+                ' · Ganador: ' + ganadorText +
+                '</div>';
+        }
+
+        const collapseId = 'jornada-partidos-' + g.j.id;
+        const toggleIcon = isCerrada ? 'expand_more' : '';
+        const toggleBtn = isCerrada
+            ? '<button class="btn btn-sm btn-outline" data-jornada-toggle="' + collapseId + '" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-top:0.3rem;"><span class="material-symbols-outlined jornada-toggle-icon" style="font-size:0.9rem;">expand_more</span> Ver partidos</button>'
+            : '';
+
+        const groupClass = isCerrada ? 'res-jornada-group res-jornada-closed' : 'res-jornada-group';
+        html += '<div class="' + groupClass + '">' +
+            '<div class="res-jornada-head" style="display:flex;align-items:center;gap:0.3rem;"><span class="material-symbols-outlined" style="font-size:0.8rem;">event</span> Jornada ' + esc(String(g.j.numero)) +
+            (fechaStr ? ' · ' + esc(fechaStr) : '') + cerradaBadge + cerrarBtn + '</div>' +
+            summaryLine + toggleBtn;
+
+        const hiddenStyle = isCerrada ? ' style="display:none;"' : '';
+        html += '<div id="' + collapseId + '"' + hiddenStyle + '>';
         g.items.forEach(p => { html += resCardHtml(p); });
-        html += '</div>';
+        html += '</div></div>';
     });
 
     panel.innerHTML = html;
     bindResPanelEvents(panel);
     panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
+    panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
 }
 
 async function renderResDetail(panel) {
@@ -3230,25 +3515,74 @@ async function renderResDetail(panel) {
 
     let html = '';
     html += resViewSwitchHtml();
+
+    const isCerrada = jornada.cerrada === true;
+    const cerradaBadge = isCerrada
+        ? '<span style="font-size:0.65rem;background:rgba(0,212,170,0.15);color:var(--primary);padding:2px 8px;border-radius:10px;margin-left:0.5rem;">CERRADA</span>'
+        : '';
+    const cerrarBtn = isCerrada
+        ? '<button class="btn btn-sm btn-outline" onclick="editarJornada(\'' + jornada.id + '\')" title="Reabrir jornada para editar resultados"><span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span> Editar Jornada</button>'
+        : '<button class="btn btn-sm btn-outline" onclick="cerrarJornada(\'' + jornada.id + '\')" title="Cerrar jornada y asignar bono"><span class="material-symbols-outlined" style="font-size:0.8rem;">lock</span> Cerrar Jornada</button>';
+
     html += '<div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">' +
-        '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_score</span> Resultados Jornada ' + esc(String(jornada.numero)) + '</span>' +
+        '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_score</span> Resultados Jornada ' + esc(String(jornada.numero)) + cerradaBadge + '</span>' +
+        '<div style="display:flex;gap:0.4rem;align-items:center;">' +
+        cerrarBtn +
         '<button class="btn btn-sm btn-outline" id="btn-back-res-jornadas" title="Cambiar jornada"><span class="material-symbols-outlined" style="font-size:0.8rem;">arrow_back</span></button>' +
-        '</div>' +
+        '</div></div>' +
         '<input type="text" id="result-search" class="search-input" placeholder="Buscar por nombre de jugador...">';
 
     if (!partidos.length) {
         html += '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">sports_score</span><p>No hay partidos en esta jornada.</p></div>';
-panel.innerHTML = html;
-    bindResPanelEvents(panel);
-    panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
-    panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
-}
+        panel.innerHTML = html;
+        bindResPanelEvents(panel);
+        panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
+        panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
+        return;
+    }
+
+    let summaryLine = '';
+    let toggleBtn = '';
+    if (isCerrada) {
+        const teamAName = getTeamName(jornada.equipo_a_id) || '?';
+        const teamBName = getTeamName(jornada.equipo_b_id) || '?';
+        const teamAColor = getTeamColor(jornada.equipo_a_id) || '#4da6ff';
+        const teamBColor = getTeamColor(jornada.equipo_b_id) || '#feb300';
+        let aWins = 0, bWins = 0;
+        partidos.forEach(p => {
+            if (p.ganador_equipo_id === jornada.equipo_a_id) aWins++;
+            else if (p.ganador_equipo_id === jornada.equipo_b_id) bWins++;
+        });
+        let ganadorText = '';
+        if (aWins > bWins) {
+            ganadorText = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin:0 3px;"></span>' + esc(teamAName);
+        } else if (bWins > aWins) {
+            ganadorText = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin:0 3px;"></span>' + esc(teamBName);
+        } else {
+            ganadorText = 'Empate';
+        }
+        summaryLine = '<div style="font-size:0.75rem;color:var(--on-surface-variant-30);margin:0.5rem 0 0.3rem;">' +
+            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin:0 2px;"></span>' + esc(teamAName) +
+            ' vs ' +
+            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin:0 2px;"></span>' + esc(teamBName) +
+            ' · Ganador: ' + ganadorText +
+            '</div>';
+
+        const collapseId = 'jornada-detail-partidos-' + jornada.id;
+        toggleBtn = '<button class="btn btn-sm btn-outline" data-jornada-toggle="' + collapseId + '" style="font-size:0.7rem;padding:0.2rem 0.5rem;margin-bottom:0.5rem;"><span class="material-symbols-outlined jornada-toggle-icon" style="font-size:0.9rem;">expand_more</span> Ver partidos</button>';
+        html += '<div class="res-jornada-closed">' + summaryLine + toggleBtn;
+        html += '<div id="' + collapseId + '" style="display:none;">';
+    }
 
     DRAW_CATEGORIAS.forEach((cat, idx) => {
         const partido = partidos.find(p => p.categoria === cat);
         if (!partido) return;
         html += resCardHtml(partido);
     });
+
+    if (isCerrada) {
+        html += '</div></div>';
+    }
 
     panel.innerHTML = html;
     bindResPanelEvents(panel);
@@ -3353,7 +3687,7 @@ function resCardHtml(partido) {
         '<div class="btn-group-spaced btn-group-inline">' +
         '<button class="btn btn-primary btn-sm btn-compact" data-res-save="' + partido.id + '"><span class="material-symbols-outlined" style="font-size:0.65rem;">' + (isFinalizado ? 'update' : 'save') + '</span> ' + (isFinalizado ? 'actualizar' : 'registrar') + '</button>' +
         (isFinalizado ? '<button class="btn btn-sm btn-danger btn-compact" data-res-clear="' + partido.id + '"><span class="material-symbols-outlined" style="font-size:0.65rem;">delete</span> borrar</button>' : '') +
-        (resEditing[partido.id] ? '<button class="btn btn-sm btn-outline btn-compact btn-icon" data-res-collapse="' + partido.id + '" title="Cerrar edición"><span class="material-symbols-outlined" style="font-size:0.75rem;">close</span></button>' : '') +
+        (resEditing[partido.id] ? '<button class="btn btn-sm btn-outline btn-compact" data-res-collapse="' + partido.id + '" title="Cancelar edición" style="gap:0.3rem;"><span class="material-symbols-outlined" style="font-size:0.85rem;">close</span> Cancelar</button>' : '') +
         '</div>' +
         '</div>' +
         '</div>';
@@ -3361,9 +3695,10 @@ function resCardHtml(partido) {
 
 function resUnitToken(a, b, tbA, tbB) {
     if (a === 4 && b === 4 && tbA != null && tbB != null) {
+        const tieWinner = tbA > tbB ? 'a' : 'b';
         return {
-            a: { text: '5(' + tbA + ')', win: tbA > tbB },
-            b: { text: '5(' + tbB + ')', win: tbB > tbA }
+            a: { text: String(tieWinner === 'a' ? 6 : 5) + '(' + tbA + ')', win: tbA > tbB },
+            b: { text: String(tieWinner === 'b' ? 6 : 5) + '(' + tbB + ')', win: tbB > tbA }
         };
     }
     return {
@@ -3397,7 +3732,8 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
     const tokens = buildResScoreTokens(rs);
     const scoreA = renderResSetTokens(tokens.a);
     const scoreB = renderResSetTokens(tokens.b);
-    const ganadorTxt = aWins ? (j1Name + ' / ' + j2Name) : (j3Name + ' / ' + j4Name);
+    const ganadorNombre = aWins ? getTeamName(partido.equipo_a_id) : getTeamName(partido.equipo_b_id);
+    const ganadorColor = aWins ? teamAColor : teamBColor;
 
     const jorLabel = 'Jornada ' + esc(String(getJornadaNumero(partido)));
     const headerParts = [];
@@ -3421,7 +3757,7 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
         '</div>' +
         '<div class="res-public-score">' + scoreB + '</div>' +
         '</div>' +
-        '<div class="res-winner-declaration"><span class="res-winner-label">Ganó</span> <span class="res-winner-name">' + esc(ganadorTxt) + '</span></div>' +
+        '<div class="res-winner-declaration"><span class="res-winner-label">Ganó</span> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + ganadorColor + ';vertical-align:middle;margin-right:0.3rem;"></span><span class="res-winner-name">' + esc(ganadorNombre) + '</span></div>' +
         '<div class="btn-group-spaced">' +
         '<button class="btn btn-primary btn-sm btn-compact btn-icon" data-res-edit="' + partido.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.85rem;">edit</span></button>' +
         '<button class="btn btn-sm btn-danger btn-compact btn-icon" data-res-clear="' + partido.id + '" title="Borrar"><span class="material-symbols-outlined" style="font-size:0.85rem;">delete</span></button>' +
@@ -3439,6 +3775,7 @@ function bindResPanelEvents(panel) {
 
     panel.querySelectorAll('[data-res-view]').forEach(b => b.addEventListener('click', () => {
         resView = b.dataset.resView;
+        if (resView === 'jornada') resSelectedJornadaId = null;
         flushDrafts();
         renderResultados();
     }));
@@ -3447,16 +3784,27 @@ function bindResPanelEvents(panel) {
         resSelectedJornadaId = null;
         renderResultados();
     });
+
+    panel.querySelectorAll('[data-jornada-toggle]').forEach(btn => btn.addEventListener('click', () => {
+        const targetId = btn.dataset.jornadaToggle;
+        const container = document.getElementById(targetId);
+        if (!container) return;
+        const isHidden = container.style.display === 'none';
+        container.style.display = isHidden ? '' : 'none';
+        const icon = btn.querySelector('.jornada-toggle-icon');
+        if (icon) icon.textContent = isHidden ? 'expand_less' : 'expand_more';
+        btn.childNodes[btn.childNodes.length - 1].textContent = isHidden ? ' Ocultar partidos' : ' Ver partidos';
+    }));
 }
 
-function bindResCardEvents(card, panel) {
+function bindResCardEvents(card, panel, onCollapse) {
     card.querySelectorAll('[data-res-adj]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.resAdj;
         const team = b.dataset.team;
         const delta = parseInt(b.dataset.delta);
         const unit = b.dataset.unit;
         if (adjustUnit(id, unit, team, delta)) {
-            updateResCardInPlace(id, panel);
+            updateResCardInPlace(id, panel, onCollapse);
             queueDraftSave(id);
             maybeConfirmUnit(id, unit, panel);
         }
@@ -3470,11 +3818,12 @@ function bindResCardEvents(card, panel) {
     }));
     card.querySelectorAll('[data-res-collapse]').forEach(b => b.addEventListener('click', () => {
         delete resEditing[b.dataset.resCollapse];
-        renderResultados();
+        if (onCollapse) onCollapse();
+        else renderResultados();
     }));
 }
 
-function updateResCardInPlace(id, panel) {
+function updateResCardInPlace(id, panel, onCollapse) {
     const oldCard = panel.querySelector('[data-res-card="' + id + '"]');
     const partido = resPartidos.find(p => p.id === id);
     if (!oldCard && !partido) return;
@@ -3482,7 +3831,7 @@ function updateResCardInPlace(id, panel) {
     tmp.innerHTML = resCardHtml(partido);
     const newCard = tmp.firstChild;
     if (oldCard) oldCard.replaceWith(newCard);
-    bindResCardEvents(newCard, panel);
+    bindResCardEvents(newCard, panel, onCollapse);
 }
 
 function setWinner(sa, sb, tba, tbb) {
@@ -3638,18 +3987,20 @@ async function loadAllEnfrentamientosAndPartidos() {
     allEnfrentamientosData = [];
     if (!getActiveTournamentId()) return;
     try {
-        for (const jornada of allJornadas) {
+        const results = await Promise.all(allJornadas.map(async jornada => {
             const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos'));
             const partidos = partSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-            allEnfrentamientosData.push({
+            return {
                 id: jornada.id,
                 equipo_a_id: jornada.equipo_a_id,
                 equipo_b_id: jornada.equipo_b_id,
                 _jornadaId: jornada.id,
                 _jornadaNumero: jornada.numero,
+                cerrada: jornada.cerrada === true,
                 partidos
-            });
-        }
+            };
+        }));
+        allEnfrentamientosData = results;
     } catch (e) {
         console.error('Error loading jornadas for standings:', e);
     }
@@ -3755,7 +4106,7 @@ function renderPosiciones() {
                 '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">3º ' + esc(s3.nombre) + '</span>' +
                 '</div></div>' +
                 '</div>' +
-                (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se definirán al finalizar el Round Robin</div>') +
+                (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se actualizarán con los resultados finales</div>') +
                 '</div>';
         } else if (standings.length > 0) {
             html += '<div class="card" style="border-top:3px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
@@ -3938,7 +4289,8 @@ async function saveJornada() {
                 equipo_a_id: aId,
                 equipo_b_id: bId,
                 equipo_a_nombre: teamAName,
-                equipo_b_nombre: teamBName
+                equipo_b_nombre: teamBName,
+                cerrada: false
             });
             toast('Jornada ' + nextNumero + ' creada', 'success');
         }
@@ -3980,6 +4332,116 @@ async function deleteJornada(id) {
     }
 }
 
+// ── Cerrar / Reabrir Jornada ──
+async function cerrarJornada(jornadaId) {
+    const jornada = allJornadas.find(j => j.id === jornadaId);
+    if (!jornada) return;
+
+    const partidos = resPartidos.filter(p => p._resJornadaId === jornadaId);
+    const finalizados = partidos.filter(p => p.estado === 'finalizado');
+    const total = partidos.length || 7;
+
+    let aWins = 0, bWins = 0, empates = 0;
+    finalizados.forEach(p => {
+        if (p.ganador_equipo_id === jornada.equipo_a_id) aWins++;
+        else if (p.ganador_equipo_id === jornada.equipo_b_id) bWins++;
+        else empates++;
+    });
+
+    const teamAName = getTeamName(jornada.equipo_a_id) || 'Equipo A';
+    const teamBName = getTeamName(jornada.equipo_b_id) || 'Equipo B';
+    const teamAColor = getTeamColor(jornada.equipo_a_id) || '#4da6ff';
+    const teamBColor = getTeamColor(jornada.equipo_b_id) || '#feb300';
+
+    const ptsA = aWins;
+    const bonusA = (aWins > bWins) ? 5 : 0;
+    const totalA = ptsA + bonusA;
+    const ptsB = bWins;
+    const bonusB = (bWins > aWins) ? 5 : 0;
+    const totalB = ptsB + bonusB;
+
+    let ganadorHtml = '';
+    let ganadorId = null;
+    if (aWins > bWins) {
+        ganadorId = jornada.equipo_a_id;
+        ganadorHtml = '<div style="margin-top:0.75rem;padding:0.75rem;background:rgba(0,212,170,0.1);border-radius:8px;border:1px solid rgba(0,212,170,0.3);text-align:center;">' +
+            '<span style="color:var(--primary);font-weight:600;">Ganador: <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin:0 4px;"></span>' + esc(teamAName) + '</span><br>' +
+            '<span style="font-size:0.8rem;color:var(--on-surface-variant-30);">+5 puntos de bono</span></div>';
+    } else if (bWins > aWins) {
+        ganadorId = jornada.equipo_b_id;
+        ganadorHtml = '<div style="margin-top:0.75rem;padding:0.75rem;background:rgba(0,212,170,0.1);border-radius:8px;border:1px solid rgba(0,212,170,0.3);text-align:center;">' +
+            '<span style="color:var(--primary);font-weight:600;">Ganador: <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin:0 4px;"></span>' + esc(teamBName) + '</span><br>' +
+            '<span style="font-size:0.8rem;color:var(--on-surface-variant-30);">+5 puntos de bono</span></div>';
+    } else {
+        ganadorHtml = '<div style="margin-top:0.75rem;padding:0.75rem;background:rgba(253,203,110,0.1);border-radius:8px;border:1px solid rgba(253,203,110,0.3);text-align:center;">' +
+            '<span style="color:var(--secondary);font-weight:600;">Empate — Nadie recibe bono</span></div>';
+    }
+
+    const modalHtml = '<div id="modal-cerrar-jornada" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;">' +
+        '<div style="background:var(--surface);border-radius:12px;padding:1.5rem;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' +
+        '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
+        '<span class="material-symbols-outlined" style="color:var(--secondary);font-size:1.2rem;">lock</span>' +
+        '<span style="font-family:Lexend;font-weight:600;font-size:0.95rem;">Cerrar Jornada ' + esc(String(jornada.numero)) + '</span></div>' +
+        '<div style="font-size:0.85rem;color:var(--on-surface-variant-30);margin-bottom:0.5rem;">' +
+        'Se finalizaron <strong>' + finalizados.length + '</strong> de ' + total + ' partidos.</div>' +
+        '<div style="margin:0.75rem 0;font-size:0.85rem;">' +
+        '<div style="display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+            '<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamAColor + ';vertical-align:middle;margin-right:4px;"></span>' + esc(teamAName) + '</div>' +
+            '<div>' + aWins + ' PG × 1 = ' + ptsA + ' pts' + (bonusA ? ' + 5 bono = <strong>' + totalA + ' pts</strong>' : ' pts') + '</div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;padding:0.4rem 0;">' +
+            '<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + teamBColor + ';vertical-align:middle;margin-right:4px;"></span>' + esc(teamBName) + '</div>' +
+            '<div>' + bWins + ' PG × 1 = ' + ptsB + ' pts' + (bonusB ? ' + 5 bono = <strong>' + totalB + ' pts</strong>' : ' pts') + '</div>' +
+        '</div>' +
+        '</div>' + ganadorHtml +
+        '<div style="display:flex;gap:0.5rem;margin-top:1rem;justify-content:flex-end;">' +
+        '<button id="modal-cerrar-cancel" class="btn btn-outline btn-sm">Cancelar</button>' +
+        '<button id="modal-cerrar-confirm" class="btn btn-primary btn-sm" style="background:var(--primary);color:#000;">Sí, cerrar</button>' +
+        '</div></div></div>';
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    document.getElementById('modal-cerrar-cancel').onclick = () => { document.getElementById('modal-cerrar-jornada')?.remove(); };
+    document.getElementById('modal-cerrar-confirm').onclick = async () => {
+        document.getElementById('modal-cerrar-jornada')?.remove();
+        showLoading('Cerrando jornada...');
+        try {
+            await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: true });
+            toast('Jornada ' + jornada.numero + ' cerrada' + (ganadorId ? '. Ganó ' + (ganadorId === jornada.equipo_a_id ? teamAName : teamBName) : ' — Empate'), 'success');
+            await refreshData();
+        const fp = resPartidos.find(x => x.id === partidoId);
+        if (fp?._resContainerType === 'semifinal') renderSemifinalDetail();
+        else if (fp?._resContainerType === 'final') renderFinalDetail();
+        else renderResultados();
+        } catch (e) {
+            toast('Error al cerrar jornada', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    };
+}
+
+async function editarJornada(jornadaId) {
+    const jornada = allJornadas.find(j => j.id === jornadaId);
+    if (!jornada) return;
+    showLoading('Reabriendo jornada...');
+    try {
+        await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: false });
+        toast('Jornada ' + jornada.numero + ' reabierta', 'success');
+        await refreshData();
+        renderResultados();
+    } catch (e) {
+        toast('Error al reabrir jornada', 'error');
+        console.error(e);
+    } finally {
+        hideLoading();
+    }
+}
+
+window.cerrarJornada = cerrarJornada;
+window.editarJornada = editarJornada;
+
 // ═══════════════════════════════════════════
 // SEMIFINALES
 // ═══════════════════════════════════════════
@@ -3987,6 +4449,7 @@ let allSemifinales = [];
 let selectedSemifinalId = null;
 let semiPartidos = [];
 let editingSemiPartidoId = null;
+let editingSemiFormMode = null;
 
 function semiCol() {
     return collection(db, 'torneos', getActiveTournamentId(), 'semifinales');
@@ -4034,43 +4497,78 @@ async function loadSemiPartidos(semiId) {
 }
 
 async function generateSemifinales() {
-    showLoading('Generando semifinales...');
+    showLoading('Calculando clasificación...');
     try {
         await loadAllEnfrentamientosAndPartidos();
         const result = calculateStandings(allEquipos, allEnfrentamientosData);
-        if (result.roundStatus !== 'finalizado') {
-            toast('El Round Robin debe estar finalizado para generar semifinales', 'error');
-            return;
-        }
+
         if (result.standings.length < 4) {
             toast('Se necesitan al menos 4 equipos para generar semifinales', 'error');
             return;
         }
 
         const s = result.standings;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML =
+            '<div class="modal">' +
+            '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Confirmar Semifinales</h3>' +
+            '<div style="margin-bottom:0.8rem;">' +
+            '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CLASIFICADOS</div>' +
+            s.slice(0, 4).map((eq, i) =>
+                '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;">' +
+                '<span style="font-weight:600;font-size:0.8rem;width:1.2rem;">' + (i + 1) + '°</span>' +
+                '<span style="width:10px;height:10px;border-radius:50%;background:' + eq.color + ';flex-shrink:0;"></span>' +
+                '<span style="flex:1;font-size:0.82rem;">' + esc(eq.nombre) + '</span>' +
+                '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);">' + eq.puntos + ' pts</span>' +
+                '</div>'
+            ).join('') +
+            '</div>' +
+            '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;margin-bottom:1rem;">' +
+            '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CRUCES</div>' +
+            '<div style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin-bottom:0.3rem;">' +
+            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">SF1</span>' +
+            '<span style="color:' + s[0].color + ';font-weight:600;">' + esc(s[0].nombre) + '</span>' +
+            '<span style="font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);">VS</span>' +
+            '<span style="color:' + s[3].color + ';font-weight:600;">' + esc(s[3].nombre) + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;">' +
+            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">SF2</span>' +
+            '<span style="color:' + s[1].color + ';font-weight:600;">' + esc(s[1].nombre) + '</span>' +
+            '<span style="font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);">VS</span>' +
+            '<span style="color:' + s[2].color + ';font-weight:600;">' + esc(s[2].nombre) + '</span>' +
+            '</div>' +
+            '</div>' +
+            '<div class="btn-group" style="justify-content:flex-end;">' +
+            '<button class="btn btn-outline" id="btn-cancel-semis">Cancelar</button>' +
+            '<button class="btn btn-primary" id="btn-confirm-semis"><span class="material-symbols-outlined" style="font-size:0.9rem;">check</span> Confirmar</button>' +
+            '</div></div>';
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        document.getElementById('btn-cancel-semis').addEventListener('click', () => overlay.remove());
+        document.getElementById('btn-confirm-semis').addEventListener('click', async () => {
+            overlay.remove();
+            await doGenerateSemifinales(s);
+        });
+    } catch (e) {
+        toast('Error al calcular clasificación', 'error');
+        console.error(e);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function doGenerateSemifinales(s) {
+    showLoading('Generando semifinales...');
+    try {
         const semifinal1 = { equipo_a_id: s[0].id, equipo_a_nombre: s[0].nombre, equipo_a_posicion: 1, equipo_a_color: s[0].color, equipo_b_id: s[3].id, equipo_b_nombre: s[3].nombre, equipo_b_posicion: 4, equipo_b_color: s[3].color, ganador_equipo_id: null, estado: 'pendiente', numero: 1 };
         const semifinal2 = { equipo_a_id: s[1].id, equipo_a_nombre: s[1].nombre, equipo_a_posicion: 2, equipo_a_color: s[1].color, equipo_b_id: s[2].id, equipo_b_nombre: s[2].nombre, equipo_b_posicion: 3, equipo_b_color: s[2].color, ganador_equipo_id: null, estado: 'pendiente', numero: 2 };
 
-        const [ref1, ref2] = await Promise.all([addDoc(semiCol(), semifinal1), addDoc(semiCol(), semifinal2)]);
+        await Promise.all([addDoc(semiCol(), semifinal1), addDoc(semiCol(), semifinal2)]);
 
-        for (const semiRef of [ref1, ref2]) {
-            for (const cat of DRAW_CATEGORIAS) {
-                await addDoc(semiPartidoCol(semiRef.id), {
-                    categoria: cat,
-                    jugador_a_1_id: null, jugador_a_2_id: null,
-                    jugador_b_1_id: null, jugador_b_2_id: null,
-                    jugador_a_1_nombre: '', jugador_a_2_nombre: '',
-                    jugador_b_1_nombre: '', jugador_b_2_nombre: '',
-                    set1_a: null, set1_b: null,
-                    set2_a: null, set2_b: null,
-                    supertiebreak_a: null, supertiebreak_b: null,
-                    games_a: 0, games_b: 0,
-                    ganador_equipo_id: null, estado: 'pendiente'
-                });
-            }
-        }
-
-        toast('Semifinales generadas', 'success');
+        toast('Semifinales generadas — agregá las categorías que desees', 'success');
         await loadSemifinales();
         renderSemifinales();
     } catch (e) {
@@ -4083,11 +4581,14 @@ async function generateSemifinales() {
 
 async function saveSemiPartido() {
     const semiId = selectedSemifinalId;
-    const partidoId = editingSemiPartidoId;
-    if (!semiId || !partidoId) return;
+    const editingId = editingSemiPartidoId;
+    if (!semiId || !editingId) return;
 
     const semi = allSemifinales.find(s => s.id === semiId);
     if (!semi) return;
+
+    const isNew = editingId.startsWith('__new__');
+    const categoria = isNew ? editingId.replace('__new__', '') : '';
 
     const j1 = document.getElementById('dp-j1')?.value || null;
     const j2 = document.getElementById('dp-j2')?.value || null;
@@ -4110,22 +4611,66 @@ async function saveSemiPartido() {
     if (j3Data && j3Data.equipo_id !== semi.equipo_b_id) { toast('Jugador 3 no pertenece al equipo B', 'error'); return; }
     if (j4Data && j4Data.equipo_id !== semi.equipo_b_id) { toast('Jugador 4 no pertenece al equipo B', 'error'); return; }
 
+    const data = {
+        jugador_a_1_id: j1, jugador_a_2_id: j2,
+        jugador_b_1_id: j3, jugador_b_2_id: j4,
+        jugador_a_1_nombre: getJugadorNombre(j1),
+        jugador_a_2_nombre: getJugadorNombre(j2),
+        jugador_b_1_nombre: getJugadorNombre(j3),
+        jugador_b_2_nombre: getJugadorNombre(j4)
+    };
+
     showLoading('Guardando...');
     try {
-        await updateDoc(semiPartidoDocRef(semiId, partidoId), {
-            jugador_a_1_id: j1, jugador_a_2_id: j2,
-            jugador_b_1_id: j3, jugador_b_2_id: j4,
-            jugador_a_1_nombre: getJugadorNombre(j1),
-            jugador_a_2_nombre: getJugadorNombre(j2),
-            jugador_b_1_nombre: getJugadorNombre(j3),
-            jugador_b_2_nombre: getJugadorNombre(j4)
-        });
-        toast('Jugadores guardados', 'success');
+        if (isNew) {
+            data.categoria = categoria;
+            data.equipo_a_id = semi.equipo_a_id;
+            data.equipo_b_id = semi.equipo_b_id;
+            data.set1_a = null; data.set1_b = null;
+            data.set2_a = null; data.set2_b = null;
+            data.tiebreak1_a = null; data.tiebreak1_b = null;
+            data.tiebreak2_a = null; data.tiebreak2_b = null;
+            data.supertiebreak_a = null; data.supertiebreak_b = null;
+            data.games_a = 0; data.games_b = 0;
+            data.ganador_equipo_id = null;
+            data.estado = 'pendiente';
+            await addDoc(semiPartidoCol(semiId), data);
+            toast('Partido creado — ' + formatCategoria(categoria), 'success');
+        } else {
+            await updateDoc(semiPartidoDocRef(semiId, editingId), data);
+            toast('Jugadores guardados', 'success');
+        }
         editingSemiPartidoId = null;
         await loadSemiPartidos(semiId);
         renderSemifinalDetail();
     } catch (e) {
         toast('Error al guardar', 'error'); console.error(e);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function deleteSemiPartido(partidoId) {
+    const semiId = selectedSemifinalId;
+    if (!semiId || !partidoId) return;
+
+    const semi = allSemifinales.find(s => s.id === semiId);
+    if (!semi) return;
+
+    const partido = semiPartidos.find(p => p.id === partidoId);
+    if (!partido) return;
+
+    if (!confirm('¿Eliminar el partido "' + formatCategoria(partido.categoria) + '"?')) return;
+
+    showLoading('Eliminando partido...');
+    try {
+        await deleteDoc(semiPartidoDocRef(semiId, partidoId));
+        toast('Partido eliminado', 'success');
+        editingSemiPartidoId = null;
+        await loadSemiPartidos(semiId);
+        renderSemifinalDetail();
+    } catch (e) {
+        toast('Error al eliminar', 'error'); console.error(e);
     } finally {
         hideLoading();
     }
@@ -4251,6 +4796,85 @@ async function checkSemiWinner(semiId) {
     }
 }
 
+function cerrarSemifinal(semiId) {
+    const semi = allSemifinales.find(s => s.id === semiId);
+    if (!semi) return;
+
+    const finalizados = semiPartidos.filter(p => p.estado === 'finalizado');
+    if (finalizados.length === 0) {
+        toast('No hay partidos finalizados para cerrar', 'error');
+        return;
+    }
+
+    let aWins = 0, bWins = 0;
+    finalizados.forEach(p => {
+        if (p.ganador_equipo_id === semi.equipo_a_id) aWins++;
+        else if (p.ganador_equipo_id === semi.equipo_b_id) bWins++;
+    });
+
+    if (aWins === bWins) {
+        toast('Hay empate (' + aWins + ' - ' + bWins + '). Jugá un desempate o borra un resultado', 'error');
+        return;
+    }
+
+    const ganadorId = aWins > bWins ? semi.equipo_a_id : semi.equipo_b_id;
+    const ganadorName = aWins > bWins ? semi.equipo_a_nombre : semi.equipo_b_nombre;
+    const ganadorColor = aWins > bWins ? (semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888') : (semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888');
+    const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
+    const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+        '<div class="modal">' +
+        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Cerrar Semifinal ' + (semi.numero || '') + '</h3>' +
+        '<div style="margin-bottom:0.8rem;">' +
+        '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.82rem;">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:' + aColor + ';flex-shrink:0;"></span>' +
+        '<span style="flex:1;font-weight:600;">' + esc(semi.equipo_a_nombre) + '</span>' +
+        '<span style="font-weight:800;font-size:0.85rem;">' + aWins + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.82rem;">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:' + bColor + ';flex-shrink:0;"></span>' +
+        '<span style="flex:1;font-weight:600;">' + esc(semi.equipo_b_nombre) + '</span>' +
+        '<span style="font-weight:800;font-size:0.85rem;">' + bWins + '</span>' +
+        '</div>' +
+        '</div>' +
+        '<div style="background:rgba(0,212,170,0.1);border:1px solid rgba(0,212,170,0.2);border-radius:8px;padding:0.6rem;margin-bottom:1rem;text-align:center;">' +
+        '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">Ganador</div>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:0.4rem;">' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + ganadorColor + ';"></span>' +
+        '<span style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + esc(ganadorName) + '</span>' +
+        '</div>' +
+        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-top:0.2rem;">avanza a la Final</div>' +
+        '</div>' +
+        '<div class="btn-group" style="justify-content:flex-end;">' +
+        '<button class="btn btn-outline" id="btn-cancel-close-semi">Cancelar</button>' +
+        '<button class="btn btn-primary" id="btn-confirm-close-semi"><span class="material-symbols-outlined" style="font-size:0.9rem;">check</span> Cerrar y Definir</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('btn-cancel-close-semi').addEventListener('click', () => overlay.remove());
+    document.getElementById('btn-confirm-close-semi').addEventListener('click', async () => {
+        overlay.remove();
+        showLoading('Cerrando semifinal...');
+        try {
+            await updateDoc(semiDocRef(semiId), { ganador_equipo_id: ganadorId, estado: 'finalizado' });
+            semi.ganador_equipo_id = ganadorId;
+            semi.estado = 'finalizado';
+            toast('Semifinal cerrada — Ganador: ' + ganadorName, 'success');
+            await loadSemiPartidos(semiId);
+            renderSemifinalDetail();
+        } catch (e) {
+            toast('Error al cerrar semifinal', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    });
+}
+
 function renderSemifinales() {
     const panel = document.getElementById('panel-semifinales');
     if (selectedSemifinalId) {
@@ -4273,14 +4897,8 @@ function renderSemifinales() {
             '<div>' +
             '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">SEMIFINALES</div>' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);">' +
-            (allComplete ? 'Round Robin finalizado — Semifinales disponibles' : 'Round Robin en curso — Semifinales bloqueadas') +
+            (allComplete ? 'Round Robin finalizado — Clasificación definida' : 'Round Robin en curso — Clasificación parcial') +
             '</div></div></div></div>';
-
-        if (!allComplete) {
-            html += '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">lock</span><p>Las semifinales se habilitan al finalizar el Round Robin.</p></div>';
-            panel.innerHTML = html;
-            return;
-        }
 
         if (!hasSemis) {
             html += '<div class="empty-state" style="padding:2rem;">' +
@@ -4292,6 +4910,11 @@ function renderSemifinales() {
             document.getElementById('btn-gen-semis')?.addEventListener('click', () => safeAction(generateSemifinales));
             return;
         }
+
+        // Acciones globales de Semifinales
+        html += '<div style="margin-bottom:0.75rem;">' +
+            '<button class="btn btn-primary" id="btn-gen-final-semis" style="width:100%;"><span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Generar Final con estado actual</button>' +
+            '</div>';
 
         // Show semifinal cards
         allSemifinales.forEach(semi => {
@@ -4331,9 +4954,11 @@ function renderSemifinales() {
         });
 
         panel.innerHTML = html;
-        panel.querySelectorAll('[data-semi-id]').forEach(b => b.addEventListener('click', () => {
+        document.getElementById('btn-gen-final-semis')?.addEventListener('click', () => safeAction(generateFinal));
+        panel.querySelectorAll('[data-semi-id]').forEach(b => b.addEventListener('click', async () => {
             selectedSemifinalId = b.dataset.semiId;
             editingSemiPartidoId = null;
+            await loadSemiPartidos(b.dataset.semiId);
             renderSemifinalDetail();
         }));
     });
@@ -4399,67 +5024,120 @@ function renderSemifinalDetail() {
 
     html += '</div>';
 
+    if (semi.estado !== 'finalizado' && aWins + bWins > 0) {
+        html += '<div style="margin:0.75rem 0;display:flex;gap:0.5rem;flex-wrap:wrap;">' +
+            '<button class="btn btn-primary" id="btn-close-semi" style="flex:1;"><span class="material-symbols-outlined" style="font-size:1rem;">lock</span> Cerrar Semifinal</button>' +
+            '<button class="btn btn-outline" id="btn-gen-final-detail" style="flex:1;"><span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Generar Final</button>' +
+            '</div>';
+    } else {
+        html += '<div style="margin:0.75rem 0;">' +
+            '<button class="btn btn-outline" id="btn-gen-final-detail" style="width:100%;"><span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Generar Final con estado actual</button>' +
+            '</div>';
+    }
+
     // Edit form (if editing)
     if (editingSemiPartidoId) {
-        const part = semiPartidos.find(p => p.id === editingSemiPartidoId);
-        if (part && part.estado !== 'finalizado') {
+        if (editingSemiPartidoId.startsWith('__new__')) {
             html += renderSemiPartidoForm(semi);
-        } else if (part && part.estado === 'finalizado') {
-            html += renderSemiResultadoForm(semi, part);
+        } else {
+            const part = semiPartidos.find(p => p.id === editingSemiPartidoId);
+            if (part) {
+                if (editingSemiFormMode === 'score') {
+                    const hasPlayers = part.jugador_a_1_id && part.jugador_b_1_id;
+                    if (hasPlayers) {
+                        part._resContainerType = 'semifinal';
+                        part._resContainerId = selectedSemifinalId;
+                        part._resJornadaId = selectedSemifinalId;
+                        part._jornadaNumero = 'Semifinal';
+                        part._teamAColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#4da6ff';
+                        part._teamBColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#feb300';
+                        if (!resPartidos.find(p => p.id === part.id)) resPartidos.push(part);
+                        if (!resultScores[part.id]) {
+                            resultScores[part.id] = { set1_a: 0, set1_b: 0, set2_a: 0, set2_b: 0, tb1_a: null, tb1_b: null, tb2_a: null, tb2_b: null, stb_a: null, stb_b: null, _closed: {} };
+                        }
+                        resEditing[part.id] = true;
+                        html += '<div id="res-card-panel-semi">';
+                        html += resCardHtml(part);
+                        html += '</div>';
+                    } else {
+                        html += '<div class="card" style="border:2px solid var(--error);margin-bottom:0.5rem;padding:0.75rem;font-size:0.8rem;color:var(--error);">⚠️ Primero asigná los jugadores para poder cargar el resultado.</div>';
+                        html += renderSemiPartidoForm(semi, part);
+                    }
+                } else {
+                    html += renderSemiPartidoForm(semi, part);
+                }
+            }
         }
     }
 
     // Partidos list
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos</div>';
+    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + semi.partidos.length + '/7)</div>';
 
     DRAW_CATEGORIAS.forEach((cat, idx) => {
         const partido = semi.partidos.find(p => p.categoria === cat);
-        if (!partido) return;
         const num = String(idx + 1).padStart(2, '0');
-        const isFinalizado = partido.estado === 'finalizado';
 
-        const j1Name = getJugadorNombre(partido.jugador_a_1_id) || partido.jugador_a_1_nombre || '';
-        const j2Name = getJugadorNombre(partido.jugador_a_2_id) || partido.jugador_a_2_nombre || '';
-        const j3Name = getJugadorNombre(partido.jugador_b_1_id) || partido.jugador_b_1_nombre || '';
-        const j4Name = getJugadorNombre(partido.jugador_b_2_id) || partido.jugador_b_2_nombre || '';
+        if (partido) {
+            const isFinalizado = partido.estado === 'finalizado';
+            const j1Name = getJugadorNombre(partido.jugador_a_1_id) || partido.jugador_a_1_nombre || '';
+            const j2Name = getJugadorNombre(partido.jugador_a_2_id) || partido.jugador_a_2_nombre || '';
+            const j3Name = getJugadorNombre(partido.jugador_b_1_id) || partido.jugador_b_1_nombre || '';
+            const j4Name = getJugadorNombre(partido.jugador_b_2_id) || partido.jugador_b_2_nombre || '';
+            const isEmpty = !partido.jugador_a_1_id && !partido.jugador_a_2_id && !partido.jugador_b_1_id && !partido.jugador_b_2_id;
 
-        const borderColor = isFinalizado ? (partido.ganador_equipo_id === semi.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
+            const borderColor = isFinalizado ? (partido.ganador_equipo_id === semi.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
 
-        html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
-            '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
-            '<div style="flex:1;min-width:0;">' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
-            (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
-            '</div>' +
-            '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span>' +
-            '<span>' + esc(j1Name || '—') + ' / ' + esc(j2Name || '—') + '</span></div>' +
-            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span>' +
-            '<span>' + esc(j3Name || '—') + ' / ' + esc(j4Name || '—') + '</span></div>' +
-            '</div>';
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
+                '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
+                '<div style="flex:1;min-width:0;">' +
+                '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
+                (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
+                '</div>';
 
-        if (isFinalizado) {
-            const s1 = partido.set1_a + '-' + partido.set1_b;
-            const s2 = partido.set2_a + '-' + partido.set2_b;
-            const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
-            const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
-            const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
-            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
-            const ganadorName = partido.ganador_equipo_id === semi.equipo_a_id ? semi.equipo_a_nombre : semi.equipo_b_nombre;
-            html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
-                '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
-                ' · <span style="color:var(--secondary);">🏆 ' + esc(ganadorName) + '</span></div>';
+            if (isEmpty) {
+                html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>';
+            } else {
+                html += '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
+                    '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span>' +
+                    '<span>' + esc(j1Name || '—') + ' / ' + esc(j2Name || '—') + '</span></div>' +
+                    '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
+                    '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span>' +
+                    '<span>' + esc(j3Name || '—') + ' / ' + esc(j4Name || '—') + '</span></div>' +
+                    '</div>';
+            }
+
+            if (isFinalizado) {
+                const s1 = partido.set1_a + '-' + partido.set1_b;
+                const s2 = partido.set2_a + '-' + partido.set2_b;
+                const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
+                const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
+                const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
+                const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
+                const ganadorName = partido.ganador_equipo_id === semi.equipo_a_id ? semi.equipo_a_nombre : semi.equipo_b_nombre;
+                html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
+                    '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
+                    ' · <span style="color:var(--secondary);">🏆 ' + esc(ganadorName) + '</span></div>';
+            }
+
+            html += '</div>' +
+                '<div style="display:flex;gap:0.3rem;">' +
+                '<button class="btn btn-sm btn-outline" data-semi-edit-players="' + partido.id + '" title="Editar jugadores"><span class="material-symbols-outlined" style="font-size:0.8rem;">people</span></button>' +
+                '<button class="btn btn-sm btn-outline" data-semi-edit="' + partido.id + '" title="Editar score"><span class="material-symbols-outlined" style="font-size:0.8rem;">sports_score</span></button>' +
+                '<button class="btn btn-sm btn-danger" data-del-semi-partido="' + partido.id + '" title="Eliminar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
+                '</div></div></div>';
+        } else {
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
+                '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
+                '</div>' +
+                '<button class="btn btn-sm btn-primary" data-add-semi-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
+                '</div></div>';
         }
-
-        html += '</div>' +
-            '<div style="display:flex;gap:0.3rem;">' +
-            '<button class="btn btn-sm btn-outline" data-semi-edit="' + partido.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.8rem;">' + (isFinalizado ? 'edit' : 'sports_score') + '</span></button>' +
-            (isFinalizado ? '<button class="btn btn-sm btn-danger" data-semi-clear="' + partido.id + '" title="Limpiar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' : '') +
-            '</div></div></div>';
     });
 
     panel.innerHTML = html;
@@ -4468,24 +5146,49 @@ function renderSemifinalDetail() {
     document.getElementById('btn-back-semis')?.addEventListener('click', () => {
         selectedSemifinalId = null;
         editingSemiPartidoId = null;
+        editingSemiFormMode = null;
         semiPartidos = [];
         renderSemifinales();
     });
 
-    panel.querySelectorAll('[data-semi-edit]').forEach(b => b.addEventListener('click', () => {
-        editingSemiPartidoId = b.dataset.semiEdit;
+    document.getElementById('btn-close-semi')?.addEventListener('click', () => safeAction(() => cerrarSemifinal(selectedSemifinalId)));
+    document.getElementById('btn-gen-final-detail')?.addEventListener('click', () => safeAction(generateFinal));
+
+    panel.querySelectorAll('[data-add-semi-partido]').forEach(b => b.addEventListener('click', () => {
+        editingSemiPartidoId = '__new__' + b.dataset.addSemiPartido;
         renderSemifinalDetail();
     }));
 
-    panel.querySelectorAll('[data-semi-clear]').forEach(b => b.addEventListener('click', () => safeAction(() => {
-        editingSemiPartidoId = b.dataset.semiClear;
-        clearSemiResultado();
-    })));
+    panel.querySelectorAll('[data-edit-semi-partido]').forEach(b => b.addEventListener('click', () => {
+        editingSemiPartidoId = b.dataset.editSemiPartido;
+        renderSemifinalDetail();
+    }));
+
+    panel.querySelectorAll('[data-semi-edit]').forEach(b => b.addEventListener('click', () => {
+        editingSemiPartidoId = b.dataset.semiEdit;
+        editingSemiFormMode = 'score';
+        renderSemifinalDetail();
+    }));
+
+    panel.querySelectorAll('[data-semi-edit-players]').forEach(b => b.addEventListener('click', () => {
+        editingSemiPartidoId = b.dataset.semiEditPlayers;
+        editingSemiFormMode = 'players';
+        renderSemifinalDetail();
+    }));
+
+    panel.querySelectorAll('[data-del-semi-partido]').forEach(b => b.addEventListener('click', () => safeAction(() => deleteSemiPartido(b.dataset.delSemiPartido))));
 
     document.getElementById('btn-save-semi-partido')?.addEventListener('click', () => safeAction(saveSemiPartido));
-    document.getElementById('btn-cancel-semi-partido')?.addEventListener('click', () => { editingSemiPartidoId = null; renderSemifinalDetail(); });
-    document.getElementById('btn-save-semi-resultado')?.addEventListener('click', () => safeAction(saveSemiResultado));
-    document.getElementById('btn-cancel-semi-resultado')?.addEventListener('click', () => { editingSemiPartidoId = null; renderSemifinalDetail(); });
+    document.getElementById('btn-cancel-semi-partido')?.addEventListener('click', () => { editingSemiPartidoId = null; editingSemiFormMode = null; renderSemifinalDetail(); });
+
+    // Bind res card events for score editing
+    const resCardPanel = document.getElementById('res-card-panel-semi');
+    if (resCardPanel) {
+        const card = resCardPanel.querySelector('[data-res-card]');
+        if (card) {
+            bindResCardEvents(card, resCardPanel, () => { editingSemiFormMode = null; renderSemifinalDetail(); });
+        }
+    }
 
     // Player select cross-referencing
     const j1Sel = document.getElementById('dp-j1');
@@ -4513,9 +5216,9 @@ function renderSemifinalDetail() {
     }
 }
 
-function renderSemiPartidoForm(semi) {
-    const part = semiPartidos.find(p => p.id === editingSemiPartidoId);
-    if (!part) return '';
+function renderSemiPartidoForm(semi, existingPart) {
+    const isNew = editingSemiPartidoId && editingSemiPartidoId.startsWith('__new__');
+    const categoria = isNew ? editingSemiPartidoId.replace('__new__', '') : (existingPart?.categoria || '');
 
     const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
     const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
@@ -4523,26 +5226,38 @@ function renderSemiPartidoForm(semi) {
     const bPlayers = getPlayersInTeam(semi.equipo_b_id);
     const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
 
+    const j1 = existingPart?.jugador_a_1_id || '';
+    const j2 = existingPart?.jugador_a_2_id || '';
+    const j3 = existingPart?.jugador_b_1_id || '';
+    const j4 = existingPart?.jugador_b_2_id || '';
+
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
-        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(formatCategoria(part.categoria || '')) +
+        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">' + (isNew ? 'add' : 'edit') + '</span> ' + (isNew ? 'Crear' : 'Editar') + ' — ' + esc(formatCategoria(categoria)) +
         '</div>';
+
+    if (aPlayers.length < 2) {
+        html += '<div style="font-size:0.78rem;color:var(--error);margin-bottom:0.5rem;">⚠️ Equipo A necesita al menos 2 jugadores (' + aPlayers.length + '/2)</div>';
+    }
+    if (bPlayers.length < 2) {
+        html += '<div style="font-size:0.78rem;color:var(--error);margin-bottom:0.5rem;">⚠️ Equipo B necesita al menos 2 jugadores (' + bPlayers.length + '/2)</div>';
+    }
 
     html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(semi.equipo_a_nombre) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1">' + makeOpts(aPlayers, part.jugador_a_1_id, part.jugador_a_2_id) + '</select></div>' +
-        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2">' + makeOpts(aPlayers, part.jugador_a_2_id, part.jugador_a_1_id) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1">' + makeOpts(aPlayers, j1, j2) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2">' + makeOpts(aPlayers, j2, j1) + '</select></div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;padding-bottom:1.5rem;font-family:Lexend;font-weight:800;font-size:0.8rem;color:var(--on-surface-variant-40);">VS</div>' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span> ' + esc(semi.equipo_b_nombre) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3">' + makeOpts(bPlayers, part.jugador_b_1_id, part.jugador_b_2_id) + '</select></div>' +
-        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4">' + makeOpts(bPlayers, part.jugador_b_2_id, part.jugador_b_1_id) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3">' + makeOpts(bPlayers, j3, j4) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4">' + makeOpts(bPlayers, j4, j3) + '</select></div>' +
         '</div></div>';
 
     html += '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +
@@ -4620,6 +5335,7 @@ let allFinales = [];
 let selectedFinalId = null;
 let finalPartidos = [];
 let editingFinalPartidoId = null;
+let editingFinalFormMode = null;
 
 function finalCol() {
     return collection(db, 'torneos', getActiveTournamentId(), 'finales');
@@ -4667,48 +5383,116 @@ async function loadFinalPartidos(finalId) {
 }
 
 async function generateFinal() {
-    showLoading('Generando final...');
+    showLoading('Calculando clasificados a la Final...');
     try {
         await loadSemifinales();
-        const finishedSemis = allSemifinales.filter(s => s.estado === 'finalizado' && s.ganador_equipo_id);
-        if (finishedSemis.length < 2) {
-            toast('Se necesitan 2 semifinales finalizadas para generar la final', 'error');
+        if (allSemifinales.length < 2) {
+            toast('Se necesitan al menos 2 semifinales para generar la final', 'error');
             return;
         }
 
-        const ganador1 = finishedSemis[0].ganador_equipo_id;
-        const ganador2 = finishedSemis[1].ganador_equipo_id;
-        const eq1 = allEquipos.find(e => e.id === ganador1);
-        const eq2 = allEquipos.find(e => e.id === ganador2);
+        const sortedSemis = [...allSemifinales].sort((a, b) => (a.numero || 0) - (b.numero || 0));
 
+        // Semifinal 1 winner calculation
+        const s1 = sortedSemis[0];
+        let partidos1 = s1.partidos || [];
+        if (!partidos1.length) {
+            try {
+                const partSnap = await getDocs(semiPartidoCol(s1.id));
+                partidos1 = partSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+            } catch (e) {}
+        }
+        let aWins1 = 0, bWins1 = 0;
+        partidos1.forEach(p => {
+            if (p.ganador_equipo_id === s1.equipo_a_id) aWins1++;
+            else if (p.ganador_equipo_id === s1.equipo_b_id) bWins1++;
+        });
+        const winnerId1 = s1.ganador_equipo_id || (aWins1 > bWins1 ? s1.equipo_a_id : (bWins1 > aWins1 ? s1.equipo_b_id : s1.equipo_a_id));
+        const winnerName1 = winnerId1 === s1.equipo_a_id ? s1.equipo_a_nombre : s1.equipo_b_nombre;
+        const winnerColor1 = winnerId1 === s1.equipo_a_id ? (s1.equipo_a_color || getTeamColor(s1.equipo_a_id)) : (s1.equipo_b_color || getTeamColor(s1.equipo_b_id));
+
+        // Semifinal 2 winner calculation
+        const s2 = sortedSemis[1];
+        let partidos2 = s2.partidos || [];
+        if (!partidos2.length) {
+            try {
+                const partSnap = await getDocs(semiPartidoCol(s2.id));
+                partidos2 = partSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+            } catch (e) {}
+        }
+        let aWins2 = 0, bWins2 = 0;
+        partidos2.forEach(p => {
+            if (p.ganador_equipo_id === s2.equipo_a_id) aWins2++;
+            else if (p.ganador_equipo_id === s2.equipo_b_id) bWins2++;
+        });
+        const winnerId2 = s2.ganador_equipo_id || (aWins2 > bWins2 ? s2.equipo_a_id : (bWins2 > aWins2 ? s2.equipo_b_id : s2.equipo_a_id));
+        const winnerName2 = winnerId2 === s2.equipo_a_id ? s2.equipo_a_nombre : s2.equipo_b_nombre;
+        const winnerColor2 = winnerId2 === s2.equipo_a_id ? (s2.equipo_a_color || getTeamColor(s2.equipo_a_id)) : (s2.equipo_b_color || getTeamColor(s2.equipo_b_id));
+
+        hideLoading();
+
+        // Modal de confirmación
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML =
+            '<div class="modal">' +
+            '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Confirmar Clasificados a la Final</h3>' +
+            '<div style="margin-bottom:0.8rem;">' +
+            '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CLASIFICADOS SEGÚN RESULTADOS ACTUALES</div>' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.5rem;background:var(--white-5);border-radius:6px;margin-bottom:0.4rem;">' +
+            '<span style="font-size:0.75rem;font-weight:600;color:var(--primary);width:3.5rem;">SF 1</span>' +
+            '<span style="width:12px;height:12px;border-radius:50%;background:' + winnerColor1 + ';flex-shrink:0;"></span>' +
+            '<span style="flex:1;font-weight:600;font-size:0.85rem;">' + esc(winnerName1) + '</span>' +
+            '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);">' + aWins1 + ' - ' + bWins1 + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.5rem;background:var(--white-5);border-radius:6px;">' +
+            '<span style="font-size:0.75rem;font-weight:600;color:var(--primary);width:3.5rem;">SF 2</span>' +
+            '<span style="width:12px;height:12px;border-radius:50%;background:' + winnerColor2 + ';flex-shrink:0;"></span>' +
+            '<span style="flex:1;font-weight:600;font-size:0.85rem;">' + esc(winnerName2) + '</span>' +
+            '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);">' + aWins2 + ' - ' + bWins2 + '</span>' +
+            '</div>' +
+            '</div>' +
+            '<div class="btn-group" style="justify-content:flex-end;">' +
+            '<button class="btn btn-outline" id="btn-cancel-final">Cancelar</button>' +
+            '<button class="btn btn-primary" id="btn-confirm-final"><span class="material-symbols-outlined" style="font-size:0.9rem;">workspace_premium</span> Generar Final</button>' +
+            '</div></div>';
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        document.getElementById('btn-cancel-final').addEventListener('click', () => overlay.remove());
+        document.getElementById('btn-confirm-final').addEventListener('click', async () => {
+            overlay.remove();
+            await doGenerateFinal(winnerId1, winnerName1, winnerColor1, winnerId2, winnerName2, winnerColor2);
+        });
+    } catch (e) {
+        toast('Error al calcular clasificados a la final', 'error');
+        console.error(e);
+        hideLoading();
+    }
+}
+
+async function doGenerateFinal(id1, name1, color1, id2, name2, color2) {
+    showLoading('Generando final...');
+    try {
+        await loadFinales();
         const finalData = {
-            equipo_a_id: ganador1, equipo_a_nombre: eq1?.nombre || '?', equipo_a_color: eq1?.color || '#888',
-            equipo_b_id: ganador2, equipo_b_nombre: eq2?.nombre || '?', equipo_b_color: eq2?.color || '#888',
+            equipo_a_id: id1, equipo_a_nombre: name1, equipo_a_color: color1 || '#888',
+            equipo_b_id: id2, equipo_b_nombre: name2, equipo_b_color: color2 || '#888',
             ganador_equipo_id: null, estado: 'pendiente', numero: 1
         };
 
-        const ref = await addDoc(finalCol(), finalData);
-
-        for (const cat of DRAW_CATEGORIAS) {
-            await addDoc(finalPartidoCol(ref.id), {
-                categoria: cat,
-                jugador_a_1_id: null, jugador_a_2_id: null,
-                jugador_b_1_id: null, jugador_b_2_id: null,
-                jugador_a_1_nombre: '', jugador_a_2_nombre: '',
-                jugador_b_1_nombre: '', jugador_b_2_nombre: '',
-                set1_a: null, set1_b: null,
-                set2_a: null, set2_b: null,
-                supertiebreak_a: null, supertiebreak_b: null,
-                games_a: 0, games_b: 0,
-                ganador_equipo_id: null, estado: 'pendiente'
-            });
+        if (allFinales.length > 0) {
+            await updateDoc(finalDocRef(allFinales[0].id), finalData);
+        } else {
+            await addDoc(finalCol(), finalData);
         }
 
-        toast('Final generada', 'success');
+        toast('¡Gran Final generada con éxito!', 'success');
         await loadFinales();
         renderFinal();
     } catch (e) {
-        toast('Error al generar final', 'error'); console.error(e);
+        toast('Error al generar final', 'error');
+        console.error(e);
     } finally {
         hideLoading();
     }
@@ -4716,11 +5500,14 @@ async function generateFinal() {
 
 async function saveFinalPartido() {
     const finalId = selectedFinalId;
-    const partidoId = editingFinalPartidoId;
-    if (!finalId || !partidoId) return;
+    const editingId = editingFinalPartidoId;
+    if (!finalId || !editingId) return;
 
     const fin = allFinales.find(f => f.id === finalId);
     if (!fin) return;
+
+    const isNew = editingId.startsWith('__new__');
+    const categoria = isNew ? editingId.replace('__new__', '') : '';
 
     const j1 = document.getElementById('dp-j1')?.value || null;
     const j2 = document.getElementById('dp-j2')?.value || null;
@@ -4741,22 +5528,66 @@ async function saveFinalPartido() {
     if (j3Data && j3Data.equipo_id !== fin.equipo_b_id) { toast('Jugador 3 no pertenece al equipo B', 'error'); return; }
     if (j4Data && j4Data.equipo_id !== fin.equipo_b_id) { toast('Jugador 4 no pertenece al equipo B', 'error'); return; }
 
+    const data = {
+        jugador_a_1_id: j1, jugador_a_2_id: j2,
+        jugador_b_1_id: j3, jugador_b_2_id: j4,
+        jugador_a_1_nombre: getJugadorNombre(j1),
+        jugador_a_2_nombre: getJugadorNombre(j2),
+        jugador_b_1_nombre: getJugadorNombre(j3),
+        jugador_b_2_nombre: getJugadorNombre(j4)
+    };
+
     showLoading('Guardando...');
     try {
-        await updateDoc(finalPartidoDocRef(finalId, partidoId), {
-            jugador_a_1_id: j1, jugador_a_2_id: j2,
-            jugador_b_1_id: j3, jugador_b_2_id: j4,
-            jugador_a_1_nombre: getJugadorNombre(j1),
-            jugador_a_2_nombre: getJugadorNombre(j2),
-            jugador_b_1_nombre: getJugadorNombre(j3),
-            jugador_b_2_nombre: getJugadorNombre(j4)
-        });
-        toast('Jugadores guardados', 'success');
+        if (isNew) {
+            data.categoria = categoria;
+            data.equipo_a_id = fin.equipo_a_id;
+            data.equipo_b_id = fin.equipo_b_id;
+            data.set1_a = null; data.set1_b = null;
+            data.set2_a = null; data.set2_b = null;
+            data.tiebreak1_a = null; data.tiebreak1_b = null;
+            data.tiebreak2_a = null; data.tiebreak2_b = null;
+            data.supertiebreak_a = null; data.supertiebreak_b = null;
+            data.games_a = 0; data.games_b = 0;
+            data.ganador_equipo_id = null;
+            data.estado = 'pendiente';
+            await addDoc(finalPartidoCol(finalId), data);
+            toast('Partido creado — ' + formatCategoria(categoria), 'success');
+        } else {
+            await updateDoc(finalPartidoDocRef(finalId, editingId), data);
+            toast('Jugadores guardados', 'success');
+        }
         editingFinalPartidoId = null;
         await loadFinalPartidos(finalId);
         renderFinalDetail();
     } catch (e) {
         toast('Error al guardar', 'error'); console.error(e);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function deleteFinalPartido(partidoId) {
+    const finalId = selectedFinalId;
+    if (!finalId || !partidoId) return;
+
+    const fin = allFinales.find(f => f.id === finalId);
+    if (!fin) return;
+
+    const partido = finalPartidos.find(p => p.id === partidoId);
+    if (!partido) return;
+
+    if (!confirm('¿Eliminar el partido "' + formatCategoria(partido.categoria) + '"?')) return;
+
+    showLoading('Eliminando partido...');
+    try {
+        await deleteDoc(finalPartidoDocRef(finalId, partidoId));
+        toast('Partido eliminado', 'success');
+        editingFinalPartidoId = null;
+        await loadFinalPartidos(finalId);
+        renderFinalDetail();
+    } catch (e) {
+        toast('Error al eliminar', 'error'); console.error(e);
     } finally {
         hideLoading();
     }
@@ -4882,6 +5713,84 @@ async function checkFinalWinner(finalId) {
     }
 }
 
+function cerrarFinal(finalId) {
+    const fin = allFinales.find(f => f.id === finalId);
+    if (!fin) return;
+
+    const finalizados = finalPartidos.filter(p => p.estado === 'finalizado');
+    if (finalizados.length === 0) {
+        toast('No hay partidos finalizados para cerrar', 'error');
+        return;
+    }
+
+    let aWins = 0, bWins = 0;
+    finalizados.forEach(p => {
+        if (p.ganador_equipo_id === fin.equipo_a_id) aWins++;
+        else if (p.ganador_equipo_id === fin.equipo_b_id) bWins++;
+    });
+
+    if (aWins === bWins) {
+        toast('Hay empate (' + aWins + ' - ' + bWins + '). Jugá un desempate o borra un resultado', 'error');
+        return;
+    }
+
+    const ganadorId = aWins > bWins ? fin.equipo_a_id : fin.equipo_b_id;
+    const ganadorName = aWins > bWins ? fin.equipo_a_nombre : fin.equipo_b_nombre;
+    const ganadorColor = aWins > bWins ? (fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#888') : (fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888');
+    const aColor = fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#888';
+    const bColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+        '<div class="modal">' +
+        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Cerrar Final</h3>' +
+        '<div style="margin-bottom:0.8rem;">' +
+        '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.82rem;">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:' + aColor + ';flex-shrink:0;"></span>' +
+        '<span style="flex:1;font-weight:600;">' + esc(fin.equipo_a_nombre) + '</span>' +
+        '<span style="font-weight:800;font-size:0.85rem;">' + aWins + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.82rem;">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:' + bColor + ';flex-shrink:0;"></span>' +
+        '<span style="flex:1;font-weight:600;">' + esc(fin.equipo_b_nombre) + '</span>' +
+        '<span style="font-weight:800;font-size:0.85rem;">' + bWins + '</span>' +
+        '</div>' +
+        '</div>' +
+        '<div style="background:rgba(0,212,170,0.1);border:1px solid rgba(0,212,170,0.2);border-radius:8px;padding:0.6rem;margin-bottom:1rem;text-align:center;">' +
+        '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">🏆 CAMPEÓN</div>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:0.4rem;">' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + ganadorColor + ';"></span>' +
+        '<span style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + esc(ganadorName) + '</span>' +
+        '</div>' +
+        '</div>' +
+        '<div class="btn-group" style="justify-content:flex-end;">' +
+        '<button class="btn btn-outline" id="btn-cancel-close-final">Cancelar</button>' +
+        '<button class="btn btn-primary" id="btn-confirm-close-final"><span class="material-symbols-outlined" style="font-size:0.9rem;">check</span> Cerrar y Definir Campeón</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('btn-cancel-close-final').addEventListener('click', () => overlay.remove());
+    document.getElementById('btn-confirm-close-final').addEventListener('click', async () => {
+        overlay.remove();
+        showLoading('Cerrando final...');
+        try {
+            await updateDoc(finalDocRef(finalId), { ganador_equipo_id: ganadorId, estado: 'finalizado' });
+            fin.ganador_equipo_id = ganadorId;
+            fin.estado = 'finalizado';
+            toast('Final cerrada — 🏆 CAMPEÓN: ' + ganadorName, 'success');
+            await loadFinalPartidos(finalId);
+            renderFinalDetail();
+        } catch (e) {
+            toast('Error al cerrar final', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    });
+}
+
 function renderFinal() {
     const panel = document.getElementById('panel-final');
     if (selectedFinalId) {
@@ -4907,16 +5816,10 @@ function renderFinal() {
             (allSemisComplete ? 'Semifinales completadas — Final disponible' : 'Esperando que se completen las semifinales (' + finishedSemis.length + '/2)') +
             '</div></div></div></div>';
 
-        if (!allSemisComplete && !hasFinal) {
-            html += '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">lock</span><p>La final se habilita al completar ambas semifinales.</p></div>';
-            panel.innerHTML = html;
-            return;
-        }
-
         if (!hasFinal) {
             html += '<div class="empty-state" style="padding:2rem;">' +
                 '<span class="material-symbols-outlined">workspace_premium</span>' +
-                '<p>No hay final generada.</p>' +
+                '<p>No hay final generada.<br>Podés generarla en cualquier momento con los marcadores actuales de las semifinales.</p>' +
                 '<button class="btn btn-primary" id="btn-gen-final"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Generar Final</button>' +
                 '</div>';
             panel.innerHTML = html;
@@ -4955,9 +5858,10 @@ function renderFinal() {
         });
 
         panel.innerHTML = html;
-        panel.querySelectorAll('[data-final-id]').forEach(b => b.addEventListener('click', () => {
+        panel.querySelectorAll('[data-final-id]').forEach(b => b.addEventListener('click', async () => {
             selectedFinalId = b.dataset.finalId;
             editingFinalPartidoId = null;
+            await loadFinalPartidos(b.dataset.finalId);
             renderFinalDetail();
         }));
     });
@@ -5029,67 +5933,115 @@ function renderFinalDetail() {
 
     html += '</div>';
 
+    if (fin.estado !== 'finalizado') {
+        html += '<div style="margin:0.75rem 0;">' +
+            '<button class="btn btn-primary" id="btn-close-final" style="width:100%;"><span class="material-symbols-outlined" style="font-size:1rem;">lock</span> Cerrar Final y Proclamar Campeón</button>' +
+            '</div>';
+    }
+
     // Edit forms
     if (editingFinalPartidoId) {
-        const part = finalPartidos.find(p => p.id === editingFinalPartidoId);
-        if (part && part.estado !== 'finalizado') {
+        if (editingFinalPartidoId.startsWith('__new__')) {
             html += renderFinalPartidoForm(fin);
-        } else if (part && part.estado === 'finalizado') {
-            html += renderFinalResultadoForm(fin, part);
+        } else {
+            const part = finalPartidos.find(p => p.id === editingFinalPartidoId);
+            if (part) {
+                if (editingFinalFormMode === 'score') {
+                    const hasPlayers = part.jugador_a_1_id && part.jugador_b_1_id;
+                    if (hasPlayers) {
+                        part._resContainerType = 'final';
+                        part._resContainerId = selectedFinalId;
+                        part._resJornadaId = selectedFinalId;
+                        part._jornadaNumero = 'Final';
+                        part._teamAColor = fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#4da6ff';
+                        part._teamBColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#feb300';
+                        if (!resPartidos.find(p => p.id === part.id)) resPartidos.push(part);
+                        if (!resultScores[part.id]) {
+                            resultScores[part.id] = { set1_a: 0, set1_b: 0, set2_a: 0, set2_b: 0, tb1_a: null, tb1_b: null, tb2_a: null, tb2_b: null, stb_a: null, stb_b: null, _closed: {} };
+                        }
+                        resEditing[part.id] = true;
+                        html += '<div id="res-card-panel-final">';
+                        html += resCardHtml(part);
+                        html += '</div>';
+                    } else {
+                        html += '<div class="card" style="border:2px solid var(--error);margin-bottom:0.5rem;padding:0.75rem;font-size:0.8rem;color:var(--error);">⚠️ Primero asigná los jugadores para poder cargar el resultado.</div>';
+                        html += renderFinalPartidoForm(fin, part);
+                    }
+                } else {
+                    html += renderFinalPartidoForm(fin, part);
+                }
+            }
         }
     }
 
     // Partidos list
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos</div>';
+    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + fin.partidos.length + '/7)</div>';
 
     DRAW_CATEGORIAS.forEach((cat, idx) => {
         const partido = fin.partidos.find(p => p.categoria === cat);
-        if (!partido) return;
         const num = String(idx + 1).padStart(2, '0');
-        const isFinalizado = partido.estado === 'finalizado';
 
-        const j1Name = getJugadorNombre(partido.jugador_a_1_id) || partido.jugador_a_1_nombre || '';
-        const j2Name = getJugadorNombre(partido.jugador_a_2_id) || partido.jugador_a_2_nombre || '';
-        const j3Name = getJugadorNombre(partido.jugador_b_1_id) || partido.jugador_b_1_nombre || '';
-        const j4Name = getJugadorNombre(partido.jugador_b_2_id) || partido.jugador_b_2_nombre || '';
+        if (partido) {
+            const isFinalizado = partido.estado === 'finalizado';
+            const j1Name = getJugadorNombre(partido.jugador_a_1_id) || partido.jugador_a_1_nombre || '';
+            const j2Name = getJugadorNombre(partido.jugador_a_2_id) || partido.jugador_a_2_nombre || '';
+            const j3Name = getJugadorNombre(partido.jugador_b_1_id) || partido.jugador_b_1_nombre || '';
+            const j4Name = getJugadorNombre(partido.jugador_b_2_id) || partido.jugador_b_2_nombre || '';
+            const isEmpty = !partido.jugador_a_1_id && !partido.jugador_a_2_id && !partido.jugador_b_1_id && !partido.jugador_b_2_id;
 
-        const borderColor = isFinalizado ? (partido.ganador_equipo_id === fin.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
+            const borderColor = isFinalizado ? (partido.ganador_equipo_id === fin.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
 
-        html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
-            '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
-            '<div style="flex:1;min-width:0;">' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
-            (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
-            '</div>' +
-            '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span>' +
-            '<span>' + esc(j1Name || '—') + ' / ' + esc(j2Name || '—') + '</span></div>' +
-            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
-            '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span>' +
-            '<span>' + esc(j3Name || '—') + ' / ' + esc(j4Name || '—') + '</span></div>' +
-            '</div>';
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
+                '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
+                '<div style="flex:1;min-width:0;">' +
+                '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
+                (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
+                '</div>';
 
-        if (isFinalizado) {
-            const s1 = partido.set1_a + '-' + partido.set1_b;
-            const s2 = partido.set2_a + '-' + partido.set2_b;
-            const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
-            const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
-            const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
-            const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
-            const ganadorName = partido.ganador_equipo_id === fin.equipo_a_id ? fin.equipo_a_nombre : fin.equipo_b_nombre;
-            html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
-                '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
-                ' · <span style="color:var(--secondary);">🏆 ' + esc(ganadorName) + '</span></div>';
+            if (isEmpty) {
+                html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>';
+            } else {
+                html += '<div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.75rem;">' +
+                    '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span>' +
+                    '<span>' + esc(j1Name || '—') + ' / ' + esc(j2Name || '—') + '</span></div>' +
+                    '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
+                    '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+                    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span>' +
+                    '<span>' + esc(j3Name || '—') + ' / ' + esc(j4Name || '—') + '</span></div>' +
+                    '</div>';
+            }
+
+            if (isFinalizado) {
+                const s1 = partido.set1_a + '-' + partido.set1_b;
+                const s2 = partido.set2_a + '-' + partido.set2_b;
+                const tb1 = (partido.tiebreak1_a != null && partido.tiebreak1_b != null) ? ' · TB1 ' + partido.tiebreak1_a + '-' + partido.tiebreak1_b : '';
+                const tb2 = (partido.tiebreak2_a != null && partido.tiebreak2_b != null) ? ' · TB2 ' + partido.tiebreak2_a + '-' + partido.tiebreak2_b : '';
+                const hasSTB = partido.supertiebreak_a != null && partido.supertiebreak_b != null;
+                const stb = hasSTB ? ' · STB ' + partido.supertiebreak_a + '-' + partido.supertiebreak_b : '';
+                const ganadorName = partido.ganador_equipo_id === fin.equipo_a_id ? fin.equipo_a_nombre : fin.equipo_b_nombre;
+                html += '<div style="margin-top:0.3rem;font-size:0.75rem;color:var(--on-surface-variant-40);">' +
+                    '<span style="font-weight:600;">' + s1 + '</span> · <span style="font-weight:600;">' + s2 + '</span>' + esc(tb1) + esc(tb2) + esc(stb) +
+                    ' · <span style="color:var(--secondary);">🏆 ' + esc(ganadorName) + '</span></div>';
+            }
+
+            html += '</div>' +
+                '<div style="display:flex;gap:0.3rem;">' +
+                '<button class="btn btn-sm btn-outline" data-edit-final-partido="' + partido.id + '" title="Editar jugadores"><span class="material-symbols-outlined" style="font-size:0.8rem;">people</span></button>' +
+                '<button class="btn btn-sm btn-outline" data-final-edit="' + partido.id + '" title="Editar score"><span class="material-symbols-outlined" style="font-size:0.8rem;">sports_score</span></button>' +
+                '<button class="btn btn-sm btn-danger" data-del-final-partido="' + partido.id + '" title="Eliminar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
+                '</div></div></div>';
+        } else {
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
+                '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
+                '</div>' +
+                '<button class="btn btn-sm btn-primary" data-add-final-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
+                '</div></div>';
         }
-
-        html += '</div>' +
-            '<div style="display:flex;gap:0.3rem;">' +
-            '<button class="btn btn-sm btn-outline" data-final-edit="' + partido.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.8rem;">' + (isFinalizado ? 'edit' : 'sports_score') + '</span></button>' +
-            (isFinalizado ? '<button class="btn btn-sm btn-danger" data-final-clear="' + partido.id + '" title="Limpiar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' : '') +
-            '</div></div></div>';
     });
 
     panel.innerHTML = html;
@@ -5098,24 +6050,43 @@ function renderFinalDetail() {
     document.getElementById('btn-back-finales')?.addEventListener('click', () => {
         selectedFinalId = null;
         editingFinalPartidoId = null;
+        editingFinalFormMode = null;
         finalPartidos = [];
         renderFinal();
     });
 
-    panel.querySelectorAll('[data-final-edit]').forEach(b => b.addEventListener('click', () => {
-        editingFinalPartidoId = b.dataset.finalEdit;
+    document.getElementById('btn-close-final')?.addEventListener('click', () => safeAction(() => cerrarFinal(selectedFinalId)));
+
+    panel.querySelectorAll('[data-add-final-partido]').forEach(b => b.addEventListener('click', () => {
+        editingFinalPartidoId = '__new__' + b.dataset.addFinalPartido;
         renderFinalDetail();
     }));
 
-    panel.querySelectorAll('[data-final-clear]').forEach(b => b.addEventListener('click', () => safeAction(() => {
-        editingFinalPartidoId = b.dataset.finalClear;
-        clearFinalResultado();
-    })));
+    panel.querySelectorAll('[data-edit-final-partido]').forEach(b => b.addEventListener('click', () => {
+        editingFinalPartidoId = b.dataset.editFinalPartido;
+        editingFinalFormMode = 'players';
+        renderFinalDetail();
+    }));
+
+    panel.querySelectorAll('[data-final-edit]').forEach(b => b.addEventListener('click', () => {
+        editingFinalPartidoId = b.dataset.finalEdit;
+        editingFinalFormMode = 'score';
+        renderFinalDetail();
+    }));
+
+    panel.querySelectorAll('[data-del-final-partido]').forEach(b => b.addEventListener('click', () => safeAction(() => deleteFinalPartido(b.dataset.delFinalPartido))));
 
     document.getElementById('btn-save-final-partido')?.addEventListener('click', () => safeAction(saveFinalPartido));
-    document.getElementById('btn-cancel-final-partido')?.addEventListener('click', () => { editingFinalPartidoId = null; renderFinalDetail(); });
-    document.getElementById('btn-save-final-resultado')?.addEventListener('click', () => safeAction(saveFinalResultado));
-    document.getElementById('btn-cancel-final-resultado')?.addEventListener('click', () => { editingFinalPartidoId = null; renderFinalDetail(); });
+    document.getElementById('btn-cancel-final-partido')?.addEventListener('click', () => { editingFinalPartidoId = null; editingFinalFormMode = null; renderFinalDetail(); });
+
+    // Bind res card events for score editing
+    const resCardPanel = document.getElementById('res-card-panel-final');
+    if (resCardPanel) {
+        const card = resCardPanel.querySelector('[data-res-card]');
+        if (card) {
+            bindResCardEvents(card, resCardPanel, () => { editingFinalFormMode = null; renderFinalDetail(); });
+        }
+    }
 
     // Player select cross-referencing
     const j1Sel = document.getElementById('dp-j1');
@@ -5143,9 +6114,9 @@ function renderFinalDetail() {
     }
 }
 
-function renderFinalPartidoForm(fin) {
-    const part = finalPartidos.find(p => p.id === editingFinalPartidoId);
-    if (!part) return '';
+function renderFinalPartidoForm(fin, existingPart) {
+    const isNew = editingFinalPartidoId && editingFinalPartidoId.startsWith('__new__');
+    const categoria = isNew ? editingFinalPartidoId.replace('__new__', '') : (existingPart?.categoria || '');
 
     const aColor = fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#888';
     const bColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888';
@@ -5153,26 +6124,38 @@ function renderFinalPartidoForm(fin) {
     const bPlayers = getPlayersInTeam(fin.equipo_b_id);
     const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
 
+    const j1 = existingPart?.jugador_a_1_id || '';
+    const j2 = existingPart?.jugador_a_2_id || '';
+    const j3 = existingPart?.jugador_b_1_id || '';
+    const j4 = existingPart?.jugador_b_2_id || '';
+
     let html = '<div class="card" style="border:2px solid var(--primary);margin-bottom:0.75rem;">' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;color:var(--primary);margin-bottom:0.75rem;">' +
-        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">edit</span> Seleccionar Jugadores — ' + esc(formatCategoria(part.categoria || '')) +
+        '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">' + (isNew ? 'add' : 'edit') + '</span> ' + (isNew ? 'Crear' : 'Editar') + ' — ' + esc(formatCategoria(categoria)) +
         '</div>';
+
+    if (aPlayers.length < 2) {
+        html += '<div style="font-size:0.78rem;color:var(--error);margin-bottom:0.5rem;">⚠️ Equipo A necesita al menos 2 jugadores (' + aPlayers.length + '/2)</div>';
+    }
+    if (bPlayers.length < 2) {
+        html += '<div style="font-size:0.78rem;color:var(--error);margin-bottom:0.5rem;">⚠️ Equipo B necesita al menos 2 jugadores (' + bPlayers.length + '/2)</div>';
+    }
 
     html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(fin.equipo_a_nombre) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1">' + makeOpts(aPlayers, part.jugador_a_1_id, part.jugador_a_2_id) + '</select></div>' +
-        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2">' + makeOpts(aPlayers, part.jugador_a_2_id, part.jugador_a_1_id) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 1</label><select id="dp-j1">' + makeOpts(aPlayers, j1, j2) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 2</label><select id="dp-j2">' + makeOpts(aPlayers, j2, j1) + '</select></div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;padding-bottom:1.5rem;font-family:Lexend;font-weight:800;font-size:0.8rem;color:var(--on-surface-variant-40);">VS</div>' +
         '<div style="flex:1;min-width:200px;">' +
         '<div style="font-size:0.72rem;font-family:Lexend;font-weight:600;color:var(--on-surface-variant-40);margin-bottom:0.4rem;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + bColor + ';"></span> ' + esc(fin.equipo_b_nombre) +
         '</div>' +
-        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3">' + makeOpts(bPlayers, part.jugador_b_1_id, part.jugador_b_2_id) + '</select></div>' +
-        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4">' + makeOpts(bPlayers, part.jugador_b_2_id, part.jugador_b_1_id) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 3</label><select id="dp-j3">' + makeOpts(bPlayers, j3, j4) + '</select></div>' +
+        '<div class="form-group"><label>Jugador 4</label><select id="dp-j4">' + makeOpts(bPlayers, j4, j3) + '</select></div>' +
         '</div></div>';
 
     html += '<div class="btn-group-spaced" style="margin-top:0.75rem;">' +

@@ -30,9 +30,10 @@ export function calculateStandings(equipos, allEnfrentamientos) {
 
         const partidos = enf.partidos || [];
         const finalizados = partidos.filter(p => p.estado === 'finalizado');
-        const allDone = partidos.length > 0 && finalizados.length === partidos.length;
+        const cerrada = enf.cerrada === true;
+        const allDone = partidos.length > 0 && cerrada;
 
-        let aWins = 0, bWins = 0, aLosses = 0, bLosses = 0;
+        let aWins = 0, bWins = 0;
         finalizados.forEach(p => {
             const g = p.ganador_equipo_id;
             const pJuegos = parseInt(p.games_a) || 0;
@@ -65,10 +66,10 @@ export function calculateStandings(equipos, allEnfrentamientos) {
             stats[bId].jornadas_disputadas++;
             if (aWins > bWins) {
                 stats[aId].jornadas_ganadas++;
-                stats[aId].puntos += 5;    // bonus al ganador de la jornada completa
+                stats[aId].puntos += 5;
             } else if (bWins > aWins) {
                 stats[bId].jornadas_ganadas++;
-                stats[bId].puntos += 5;    // bonus al ganador de la jornada completa
+                stats[bId].puntos += 5;
             }
         }
     });
