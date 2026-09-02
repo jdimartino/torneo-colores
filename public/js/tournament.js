@@ -1,6 +1,6 @@
 import { db } from './firebase.js';
 import {
-    getDocs, addDoc, updateDoc, deleteDoc, doc, collection,
+    getDocs, getDoc, addDoc, updateDoc, deleteDoc, doc, collection,
     query, orderBy, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import {
@@ -11,11 +11,13 @@ import {
 } from './tournamentRefs.js';
 
 let allTournaments = [];
+const _nameCache = {};
 
 export async function loadTournaments() {
     try {
         const snap = await getDocs(query(torneosCol(), orderBy('fechaCreacion', 'desc')));
         allTournaments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        allTournaments.forEach(t => { _nameCache[t.id] = t.name || t.nombre || t.id; });
     } catch (e) {
         console.error('Error loading tournaments:', e);
         allTournaments = [];
@@ -25,6 +27,30 @@ export async function loadTournaments() {
 
 export function getTournaments() {
     return allTournaments;
+}
+
+export function getTournamentName(id) {
+    const t = allTournaments.find(x => x.id === id);
+    if (t) return t.name || t.nombre || id;
+    return _nameCache[id] || null;
+}
+
+export async function loadActiveTournamentNames(ids) {
+    const missing = (ids || []).filter(id => id && !_nameCache[id]);
+    if (!missing.length) return;
+    try {
+        const snaps = await Promise.all(missing.map(id => getDoc(torneoRef(id))));
+        snaps.forEach((s, i) => {
+            if (s.exists()) {
+                const d = s.data();
+                _nameCache[s.id] = d.name || d.nombre || s.id;
+            } else {
+                _nameCache[missing[i]] = missing[i];
+            }
+        });
+    } catch (e) {
+        console.error('Error loading tournament names:', e);
+    }
 }
 
 export async function createTournament(name, bracketConfig) {
@@ -44,14 +70,13 @@ export async function createTournament(name, bracketConfig) {
 }
 
 export async function switchTournament(id) {
-    const snap = await getDocs(torneosCol());
-    for (const d of snap.docs) {
-        if (d.id === id) {
-            const data = d.data();
-            await setSelectedTournament(id);
-            setActiveTournament(id, { id, ...data });
-            return { id, ...data };
-        }
+    const snap = await getDoc(torneoRef(id));
+    if (snap.exists()) {
+        const data = snap.data();
+        await setSelectedTournament(id);
+        setActiveTournament(id, { id, ...data });
+        _nameCache[id] = data.name || data.nombre || id;
+        return { id, ...data };
     }
     return null;
 }
@@ -71,7 +96,7 @@ export async function closeTournament(id) {
 
 export async function deleteTournament(id) {
     const batch = writeBatch(db);
-    const subcols = ['jugadores', 'equipos', 'jornadas', 'partidos', 'posiciones', 'finanzas'];
+    const subcols = ['jugadores', 'equipos', 'jornadas', 'partidos', 'posiciones', 'finanzas', 'categorias'];
     for (const sub of subcols) {
         const snap = await getDocs(collection(db, 'torneos', id, sub));
         snap.docs.forEach(d => batch.delete(doc(db, 'torneos', id, sub, d.id)));

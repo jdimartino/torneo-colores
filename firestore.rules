@@ -117,6 +117,12 @@ service cloud.firestore {
         }
       }
 
+      // Categorías
+      match /categorias/{categoriaId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
       // Semifinales
       match /semifinales/{semiId} {
         allow read: if true;

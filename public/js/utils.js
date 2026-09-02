@@ -7,12 +7,17 @@ export function esc(s) {
     return d.innerHTML;
 }
 
-export function shortName(j) {
+export function shortName(j, asHTML = false) {
     if (!j) return '';
     const firstName = (j.nombre || '').split(' ')[0];
     const firstLast = (j.apellidos || '').split(' ')[0];
     const cat = j.categoria ? ' (' + j.categoria + ')' : '';
-    return firstName + ' ' + firstLast + cat;
+    const sinPago = !j.pago_recibido && !j.exonerado 
+        ? (asHTML 
+            ? '<span style="color:var(--secondary);font-size:1.2rem;vertical-align:super;margin-left:0.2rem;">•</span>'
+            : ' •') 
+        : '';
+    return firstName + ' ' + firstLast + cat + sinPago;
 }
 
 export function makeTeamHelpers(getEquipos) {

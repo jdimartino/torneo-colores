@@ -76,6 +76,12 @@ const MODULOS = {
     icon: 'account_balance_wallet',
     read: [ROLES.MASTER, ROLES.FULL],
     write: [ROLES.MASTER, ROLES.FULL]
+  },
+  categorias: {
+    label: 'Categorías',
+    icon: 'sell',
+    read: [ROLES.MASTER, ROLES.FULL],
+    write: [ROLES.MASTER, ROLES.FULL]
   }
 };
 
@@ -126,12 +132,3 @@ export function getVisibleModules() {
     .map(([key, config]) => ({ id: key, ...config }));
 }
 
-export function getModulesForTabs() {
-  return getVisibleModules().filter(m => m.write.length > 0 || ['posiciones'].includes(m.id));
-}
-
-export function canAccessModule(moduloId) {
-  const config = MODULOS[moduloId];
-  if (!config) return false;
-  return config.read.includes(_currentUser?.rol);
-}

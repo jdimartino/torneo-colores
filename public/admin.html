@@ -4,16 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Admin - Torneo de Colores</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="manifest" href="/manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@400;600;800&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&text=account_balance_wallet,add,add_circle,arrow_back,block,calendar_today,check,check_circle,chevron_left,chevron_right,close,delete,edit,email,emoji_events,error,event,expand_more,file_upload,groups,history,home,how_to_reg,info,leaderboard,lock,login,logout,manage_accounts,paid,palette,payments,people,person_add,person_off,person_remove,phone,progress_activity,receipt_long,refresh,restart_alt,save,search,sell,settings,sports_score,sports_tennis,swap_horiz,sync,unfold_less,upload_file,visibility,warning,workspace_premium" rel="stylesheet">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <meta http-equiv="Cache-Control" content="max-age=0">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2304132b'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial,sans-serif' font-weight='bold' font-size='16' fill='%233fff8b'%3ETC%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="css/styles.css?v=18">
+    <link rel="icon" type="image/png" href="/favicon.png" sizes="32x32">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' width='64' height='64'%3E%3Cdefs%3E%3CradialGradient id='ball' cx='38%' cy='34%' r='78%'%3E%3Cstop offset='0%' stop-color='%23eaff6a'/%3E%3Cstop offset='55%' stop-color='%23d3f52a'/%3E%3Cstop offset='100%' stop-color='%23a9cf00'/%3E%3C/radialGradient%3E%3CclipPath id='clip'%3E%3Ccircle cx='32' cy='32' r='22'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect x='0' y='0' width='64' height='64' rx='14' fill='%2304132b'/%3E%3Ccircle cx='32' cy='32' r='22' fill='url(%23ball)'/%3E%3Cg clip-path='url(%23clip)' fill='none' stroke='%23ffffff' stroke-width='4.2' stroke-linecap='round'%3E%3Cpath d='M14 15 C28 26, 28 38, 14 49'/%3E%3Cpath d='M50 15 C36 26, 36 38, 50 49'/%3E%3C/g%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%238fb700' stroke-width='1' opacity='0.55'/%3E%3Cellipse cx='25' cy='23' rx='6' ry='3.6' fill='%23ffffff' opacity='0.26' transform='rotate(-32 25 23)'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="css/styles.css?v=24">
 </head>
 <body class="admin-body">
 
@@ -71,47 +73,51 @@
                 </div>
                 <div class="header-line"></div>
                 <div class="tab-nav-wrap">
-                <button class="tab-scroll-btn tab-scroll-left hidden" aria-label="Anterior">
-                    <span class="material-symbols-outlined">chevron_left</span>
-                </button>
                 <nav class="tab-nav">
                     <button class="admin-tab-btn active" data-panel="jugadores" onclick="showPanel('jugadores')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">groups</span> Jugadores
-                    </button>
-                    <button class="admin-tab-btn" data-panel="equipos" onclick="showPanel('equipos')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">palette</span> Equipos
-                    </button>
-                    <button class="admin-tab-btn" data-panel="draw" onclick="showPanel('draw')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">sports_tennis</span> DRAW
+                        <span class="material-symbols-outlined">groups</span> <span class="tab-label">Jugadores</span>
                     </button>
                     <button class="admin-tab-btn" data-panel="resultados" onclick="showPanel('resultados')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">sports_score</span> Resultados
+                        <span class="material-symbols-outlined">sports_score</span> <span class="tab-label">Resultados</span>
                     </button>
                     <button class="admin-tab-btn" data-panel="posiciones" onclick="showPanel('posiciones')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">leaderboard</span> Posiciones
+                        <span class="material-symbols-outlined">leaderboard</span> <span class="tab-label">Posiciones</span>
+                    </button>
+                    <div class="tab-more-wrap">
+                        <button class="tab-more-btn" id="tab-more-btn-admin" aria-label="Más opciones">
+                            <span class="material-symbols-outlined">expand_more</span> Más
+                        </button>
+                    </div>
+                </nav>
+                <div class="tab-dropdown" id="tab-dropdown-admin">
+                    <button class="admin-tab-btn" data-panel="equipos" onclick="showPanel('equipos')">
+                        <span class="material-symbols-outlined">palette</span> Equipos
+                    </button>
+                    <button class="admin-tab-btn" data-panel="draw" onclick="showPanel('draw')">
+                        <span class="material-symbols-outlined">sports_tennis</span> DRAW
                     </button>
                     <button class="admin-tab-btn" data-panel="jornadas" onclick="showPanel('jornadas')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">event</span> Jornadas
+                        <span class="material-symbols-outlined">event</span> Jornadas
                     </button>
                     <button class="admin-tab-btn" data-panel="semifinales" onclick="showPanel('semifinales')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">emoji_events</span> Semifinales
+                        <span class="material-symbols-outlined">emoji_events</span> Semifinales
                     </button>
                     <button class="admin-tab-btn" data-panel="final" onclick="showPanel('final')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Final
+                        <span class="material-symbols-outlined">workspace_premium</span> Final
+                    </button>
+                    <button class="admin-tab-btn" data-panel="categorias" onclick="showPanel('categorias')">
+                        <span class="material-symbols-outlined">sell</span> Categorías
                     </button>
                     <button class="admin-tab-btn" data-panel="torneos" onclick="showPanel('torneos')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">settings</span> Torneos
+                        <span class="material-symbols-outlined">settings</span> Torneos
                     </button>
                     <button class="admin-tab-btn" data-panel="administracion" onclick="showPanel('administracion')">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">account_balance_wallet</span> Administración
+                        <span class="material-symbols-outlined">account_balance_wallet</span> Admin
                     </button>
-                    <button class="admin-tab-btn" data-panel="usuarios" id="tab-usuarios" onclick="showPanel('usuarios')" style="display:none;">
-                        <span class="material-symbols-outlined" style="font-size:1rem;">manage_accounts</span> Usuarios
+                    <button class="admin-tab-btn" data-panel="usuarios" id="tab-usuarios-dropdown" onclick="showPanel('usuarios')" style="display:none;">
+                        <span class="material-symbols-outlined">manage_accounts</span> Usuarios
                     </button>
-                </nav>
-                <button class="tab-scroll-btn" aria-label="Más pestañas">
-                    <span class="material-symbols-outlined">chevron_right</span>
-                </button>
+                </div>
                 </div>
             </header>
 
@@ -123,6 +129,7 @@
             <div id="panel-jornadas" class="admin-panel"></div>
             <div id="panel-semifinales" class="admin-panel"></div>
             <div id="panel-final" class="admin-panel"></div>
+            <div id="panel-categorias" class="admin-panel"></div>
             <div id="panel-torneos" class="admin-panel"></div>
             <div id="panel-administracion" class="admin-panel"></div>
             <div id="panel-usuarios" class="admin-panel"></div>
@@ -179,7 +186,7 @@
         <p>Powered by JDM Group Tech</p>
     </footer>
 
-    <script type="module" src="js/admin.js?v=43"></script>
+    <script type="module" src="js/admin.js?v=53"></script>
 
 </body>
 </html>

@@ -2,10 +2,10 @@ import { auth, db, functions } from './firebase.js';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
 import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, where, writeBatch, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, finanzasCol } from './tournamentRefs.js';
-import { renderTournamentPanel, loadTournaments, getTournaments } from './tournament.js';
+import { renderTournamentPanel, getTournaments, getTournamentName, loadActiveTournamentNames } from './tournament.js?v=2';
 import { calculateStandings } from './standings.js';
-import { CATEGORIAS_JUGADOR } from './categorias.js';
-import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite, getVisibleModules } from './permissions.js';
+import { CATEGORIAS_JUGADOR, ensureCategorias, getDrawCategoriasActivas, getDrawCategoriasTodas, invalidateCategorias, crearCategoria, editarCategoria, setCategoriaActiva, existeCategoriaDuplicada, seedCategoriasDefault, normalizeCatName } from './categorias.js?v=1';
+import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite } from './permissions.js';
 import { httpsCallable } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js';
 
 let allJugadores = [];
@@ -15,6 +15,10 @@ let allEquipos = [];
 let allPartidos = [];
 let allJornadas = [];
 let dataLoaded = false;
+let _currentPanel = null;
+let _partidosCacheKey = null;
+let _partidosCache = [];
+let _debounceTimers = new Map();
 let currentUserData = null;
 let allUsuarios = [];
 let _userModalMode = null;
@@ -27,12 +31,17 @@ function esc(s) {
     return d.innerHTML;
 }
 
-function shortName(j) {
+function shortName(j, asHTML = false) {
     if (!j) return '';
     const firstName = (j.nombre || '').split(' ')[0];
     const firstLast = (j.apellidos || '').split(' ')[0];
     const cat = j.categoria ? ' (' + j.categoria + ')' : '';
-    return firstName + ' ' + firstLast + cat;
+    const sinPago = !j.pago_recibido && !j.exonerado 
+        ? (asHTML 
+            ? '<span style="color:var(--secondary);font-size:1.2rem;vertical-align:super;margin-left:0.2rem;">•</span>'
+            : ' •') 
+        : '';
+    return firstName + ' ' + firstLast + cat + sinPago;
 }
 
 function formatDate(fecha) {
@@ -160,34 +169,92 @@ function getPlayersInTeam(equipoId) {
     return allJugadores.filter(j => j.equipo_id === equipoId);
 }
 
-// ── Tab Scroll Indicator ──
-function setupTabScroll() {
-    document.querySelectorAll('.tab-nav-wrap').forEach(wrap => {
-        const nav = wrap.querySelector('.tab-nav');
-        const btnRight = wrap.querySelector('.tab-scroll-btn');
-        const btnLeft = wrap.querySelector('.tab-scroll-left');
-        if (!nav) return;
+// ── Tab Dropdown Logic (Admin) ──
+function setupTabDropdownAdmin() {
+    const moreBtn = document.getElementById('tab-more-btn-admin');
+    const dropdown = document.getElementById('tab-dropdown-admin');
+    if (!moreBtn || !dropdown) return;
 
-        nav.addEventListener('wheel', e => {
-            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-                e.preventDefault();
-                nav.scrollLeft += e.deltaY;
-            }
-        }, { passive: false });
+    const wrap = moreBtn.closest('.tab-nav-wrap');
+    let isOpen = false;
+    let backdrop = null;
 
-        const update = () => {
-            const atEnd = nav.scrollLeft >= nav.scrollWidth - nav.clientWidth - 4;
-            const atStart = nav.scrollLeft <= 4;
-            if (btnRight) btnRight.classList.toggle('hidden', atEnd);
-            if (btnLeft) btnLeft.classList.toggle('hidden', atStart);
-        };
-        if (btnRight) btnRight.addEventListener('click', () => nav.scrollBy({ left: 200, behavior: 'smooth' }));
-        if (btnLeft) btnLeft.addEventListener('click', () => nav.scrollBy({ left: -200, behavior: 'smooth' }));
-        nav.addEventListener('scroll', update);
-        window.addEventListener('resize', update);
-        update();
+    function positionDropdown() {
+        const wrapRect = wrap.getBoundingClientRect();
+        const btnRect = moreBtn.getBoundingClientRect();
+        const ddWidth = dropdown.offsetWidth || 160;
+
+        dropdown.classList.remove('align-left', 'align-right');
+        const rightOffset = wrapRect.right - btnRect.right;
+        const ddLeft = btnRect.right - ddWidth;
+
+        if (ddLeft >= wrapRect.left) {
+            dropdown.style.right = rightOffset + 'px';
+            dropdown.style.left = 'auto';
+            dropdown.classList.add('align-right');
+        } else {
+            dropdown.style.left = '0';
+            dropdown.style.right = 'auto';
+            dropdown.classList.add('align-left');
+        }
+    }
+
+    function createBackdrop() {
+        if (backdrop) return;
+        backdrop = document.createElement('div');
+        backdrop.style.cssText = 'position:fixed;inset:0;z-index:99;background:transparent;';
+        backdrop.addEventListener('click', closeDropdown);
+        backdrop.addEventListener('touchend', (e) => { e.preventDefault(); closeDropdown(); });
+        document.body.appendChild(backdrop);
+    }
+
+    function removeBackdrop() {
+        if (backdrop) { backdrop.remove(); backdrop = null; }
+    }
+
+    function closeDropdown() {
+        if (!isOpen) return;
+        isOpen = false;
+        moreBtn.classList.remove('open');
+        dropdown.classList.remove('show');
+        removeBackdrop();
+    }
+
+    moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isOpen) {
+            closeDropdown();
+        } else {
+            isOpen = true;
+            moreBtn.classList.add('open');
+            positionDropdown();
+            dropdown.classList.add('show');
+            createBackdrop();
+        }
+    });
+
+    // Actualizar estado active en dropdown
+    document.addEventListener('click', (e) => {
+        const tabBtn = e.target.closest('[data-panel]');
+        if (tabBtn) {
+            setTimeout(() => {
+                const panelId = tabBtn.dataset.panel;
+                dropdown.querySelectorAll('button').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.panel === panelId);
+                });
+                document.querySelectorAll('.tab-nav > button[data-panel]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.panel === panelId);
+                });
+                closeDropdown();
+            }, 0);
+        }
     });
 }
+
+// Inicializar dropdown cuando el DOM esté listo
+document.addEventListener('DOMContentLoaded', () => {
+    setupTabDropdownAdmin();
+});
 
 // ── Financial Module: Administración ──
 const MONEDAS_MANUAL = ['EUR', 'USD', 'Bs'];
@@ -200,8 +267,10 @@ let _financeFiltro = 'todos';
 let _financeModalMode = null;
 let _financeEditId = null;
 let _financeMovimientosCache = [];
+let _financeDirty = true;
 let _tasas = { eur_ves: 0, usd_ves: 0, fechaActualizacion: null, fuente: '', actualizadoEn: null };
 let _tasasLoading = false;
+let _tasasLoaded = false;
 let _tasasUpdating = false;
 
 async function getMovimientosFinancieros() {
@@ -237,6 +306,7 @@ async function crearIngresoInscripcion(jugador) {
         creado: ahora
     };
     await addDoc(finanzasCol(), mov);
+    _financeDirty = true;
 }
 
 async function syncInscripcionIngreso(jugadorId) {
@@ -251,11 +321,12 @@ async function syncInscripcionIngreso(jugadorId) {
 async function sincronizarInscripciones() {
     showLoading('Sincronizando ingresos de inscripciones...');
     try {
+        const snap = await getDocs(query(finanzasCol(), where('tipo', '==', 'ingreso_inscripcion')));
+        const existentes = new Set(snap.docs.map(d => d.data().jugadorId).filter(Boolean));
         const pagados = allJugadores.filter(j => j.pago_recibido);
         let creados = 0;
         for (const j of pagados) {
-            const yaExiste = await existeIngresoInscripcion(j.id);
-            if (!yaExiste) {
+            if (!existentes.has(j.id)) {
                 await crearIngresoInscripcion(j);
                 creados++;
             }
@@ -340,7 +411,7 @@ async function guardarTasas(tasas) {
 }
 
 async function cargarTasas() {
-    if (_tasasLoading) return;
+    if (_tasasLoading || _tasasLoaded) return;
     _tasasLoading = true;
     try {
         const ref = getTasasDocRef();
@@ -373,6 +444,7 @@ async function cargarTasas() {
                 await guardarTasas(fresh);
             }
         }
+        _tasasLoaded = true;
     } catch (e) {
         console.error('[tasas] Error cargando tasas:', e);
     } finally {
@@ -509,8 +581,7 @@ function openFinanceModal(mode, editId) {
     if (mode === 'editar' && editId) {
         title.textContent = 'Editar Movimiento';
         btnEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">save</span> Actualizar';
-        getMovimientosFinancieros().then(movs => {
-            const m = movs.find(x => x.id === editId);
+        const fill = (m) => {
             if (!m) return;
             fechaEl.value = m.fecha ? new Date(m.fecha.toDate ? m.fecha.toDate() : m.fecha).toISOString().slice(0, 10) : '';
             conceptoEl.value = m.concepto || '';
@@ -518,7 +589,17 @@ function openFinanceModal(mode, editId) {
             monedaEl.value = m.moneda || 'USD';
             obsEl.value = m.observacion || '';
             updateEquivalenteModal();
-        });
+        };
+        const cached = _financeMovimientosCache.find(x => x.id === editId);
+        if (cached) {
+            fill(cached);
+        } else {
+            getMovimientosFinancieros().then(movs => {
+                _financeMovimientosCache = movs;
+                _financeDirty = false;
+                fill(movs.find(x => x.id === editId));
+            });
+        }
     } else {
         title.textContent = mode === 'ingreso' ? 'Nuevo Otro Ingreso' : 'Registrar Egreso';
         btnEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;">add</span> Guardar';
@@ -594,6 +675,7 @@ async function saveFinanceModal() {
         }
     }
     closeFinanceModal();
+    _financeDirty = true;
     renderAdministracion();
 }
 
@@ -606,6 +688,7 @@ async function deleteMovimiento(id, tipo) {
     try {
         await deleteDoc(doc(finanzasCol(), id));
         toast('Movimiento eliminado', 'success');
+        _financeDirty = true;
         renderAdministracion();
     } catch (e) {
         toast('Error al eliminar', 'error');
@@ -807,13 +890,16 @@ async function renderAdministracion() {
 
     await cargarTasas();
 
-    let movimientos = [];
-    try {
-        movimientos = await getMovimientosFinancieros();
-    } catch (e) {
-        console.error(e);
+    let movimientos = _financeMovimientosCache;
+    if (_financeDirty) {
+        try {
+            movimientos = await getMovimientosFinancieros();
+            _financeMovimientosCache = movimientos;
+            _financeDirty = false;
+        } catch (e) {
+            console.error(e);
+        }
     }
-    _financeMovimientosCache = movimientos;
 
     let html = '';
 
@@ -829,119 +915,8 @@ async function renderAdministracion() {
     html += renderFinanceFiltros();
     html += renderFinanceMovimientos(movimientos);
 
-    // Mantenimiento y Reinicio de Marcadores
-    html += '<div class="card" style="margin-top:1.5rem;border-left:4px solid var(--warning);">' +
-        '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;color:var(--warning);">' +
-        '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">restart_alt</span> Reiniciar Marcadores del Torneo</div>' +
-        '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);margin-bottom:0.75rem;">' +
-        'Borra todos los marcadores de prueba, resultados del Round Robin, Semifinales y Finales. <strong>Conserva todos los jugadores, equipos y registros financieros/administrativos intactos.</strong></div>' +
-        '<button class="btn btn-warning" id="btn-reset-tournament-scores" style="width:100%;"><span class="material-symbols-outlined" style="font-size:1rem;">restart_alt</span> Reiniciar Marcadores a Cero</button>' +
-        '</div>';
-
     panel.innerHTML = html;
-    document.getElementById('btn-reset-tournament-scores')?.addEventListener('click', () => safeAction(resetTournamentScores));
 }
-
-async function resetTournamentScores() {
-    const tid = getActiveTournamentId();
-    if (!tid) {
-        toast('No hay un torneo activo seleccionado', 'error');
-        return;
-    }
-
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML =
-        '<div class="modal">' +
-        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;color:var(--error);">⚠️ Confirmar Reinicio a Cero</h3>' +
-        '<div style="font-size:0.8rem;margin-bottom:1rem;line-height:1.4;">' +
-        '<p style="margin-bottom:0.5rem;">Esta acción eliminará:</p>' +
-        '<ul style="margin-left:1rem;margin-bottom:0.5rem;color:var(--error);">' +
-        '<li>Todos los marcadores y resultados de prueba en los partidos.</li>' +
-        '<li>Las Semifinales y Finales generadas.</li>' +
-        '</ul>' +
-        '<p style="color:var(--secondary);font-weight:600;">Se conservarán intactos:</p>' +
-        '<ul style="margin-left:1rem;color:var(--secondary);">' +
-        '<li>Todos los jugadores ingresados y sus equipos asignados.</li>' +
-        '<li>Toda la configuración y los registros financieros/administrativos.</li>' +
-        '</ul>' +
-        '</div>' +
-        '<div class="btn-group" style="justify-content:flex-end;">' +
-        '<button class="btn btn-outline" id="btn-cancel-reset">Cancelar</button>' +
-        '<button class="btn btn-danger" id="btn-confirm-reset"><span class="material-symbols-outlined" style="font-size:0.9rem;">restart_alt</span> Sí, Reiniciar Marcadores</button>' +
-        '</div></div>';
-
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.getElementById('btn-cancel-reset').addEventListener('click', () => overlay.remove());
-    document.getElementById('btn-confirm-reset').addEventListener('click', async () => {
-        overlay.remove();
-        showLoading('Reiniciando torneo a cero...');
-        try {
-            await doResetTournamentScores(tid);
-            toast('Torneo reiniciado exitosamente. ¡Listo para el sábado!', 'success');
-            await refreshData();
-        } catch (e) {
-            toast('Error al reiniciar torneo', 'error');
-            console.error(e);
-        } finally {
-            hideLoading();
-        }
-    });
-}
-
-async function doResetTournamentScores(tid) {
-    // 1. Reset partidos in all jornadas
-    const jornSnap = await getDocs(collection(db, 'torneos', tid, 'jornadas'));
-    for (const jornDoc of jornSnap.docs) {
-        await updateDoc(doc(db, 'torneos', tid, 'jornadas', jornDoc.id), { cerrada: false });
-
-        const partSnap = await getDocs(collection(db, 'torneos', tid, 'jornadas', jornDoc.id, 'partidos'));
-        for (const partDoc of partSnap.docs) {
-            await updateDoc(doc(db, 'torneos', tid, 'jornadas', jornDoc.id, 'partidos', partDoc.id), {
-                set1_a: null, set1_b: null,
-                set2_a: null, set2_b: null,
-                tiebreak1_a: null, tiebreak1_b: null,
-                tiebreak2_a: null, tiebreak2_b: null,
-                supertiebreak_a: null, supertiebreak_b: null,
-                games_a: 0, games_b: 0,
-                ganador_equipo_id: null,
-                estado: 'pendiente',
-                borrador: null,
-                fecha_resultado: null,
-                puntos_aplicados: false
-            });
-        }
-    }
-
-    // 2. Delete all semifinal docs and subcollection partidos
-    const semiSnap = await getDocs(collection(db, 'torneos', tid, 'semifinales'));
-    for (const semiDoc of semiSnap.docs) {
-        const pSnap = await getDocs(collection(db, 'torneos', tid, 'semifinales', semiDoc.id, 'partidos'));
-        for (const pDoc of pSnap.docs) {
-            await deleteDoc(doc(db, 'torneos', tid, 'semifinales', semiDoc.id, 'partidos', pDoc.id));
-        }
-        await deleteDoc(doc(db, 'torneos', tid, 'semifinales', semiDoc.id));
-    }
-
-    // 3. Delete all final docs and subcollection partidos
-    const finalSnap = await getDocs(collection(db, 'torneos', tid, 'finales'));
-    for (const finDoc of finalSnap.docs) {
-        const pSnap = await getDocs(collection(db, 'torneos', tid, 'finales', finDoc.id, 'partidos'));
-        for (const pDoc of pSnap.docs) {
-            await deleteDoc(doc(db, 'torneos', tid, 'finales', finDoc.id, 'partidos', pDoc.id));
-        }
-        await deleteDoc(doc(db, 'torneos', tid, 'finales', finDoc.id));
-    }
-
-    allSemifinales = [];
-    allFinales = [];
-    selectedSemifinalId = null;
-    selectedFinalId = null;
-}
-
-window.resetTournamentScores = resetTournamentScores;
-
 
 // ── Auth ──
 let currentAdminUids = [];
@@ -1013,7 +988,6 @@ async function initializeAdminPanel(user) {
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('login-container-wrapper').style.display = 'none';
     document.getElementById('admin-panel').style.display = 'block';
-    setupTabScroll();
     initTournamentSelector();
     await loadTournamentConfig();
     applyUIPermissions();
@@ -1027,7 +1001,7 @@ async function initializeAdminPanel(user) {
         renderPanel('torneos');
         return true;
     }
-    await loadTournaments();
+    if (getActiveTournamentIds().length > 1) await loadActiveTournamentNames(getActiveTournamentIds());
     updateTournamentSelector();
     const initialPanel = location.hash.replace('#', '') || 'jugadores';
     _switchPanel(initialPanel);
@@ -1035,6 +1009,7 @@ async function initializeAdminPanel(user) {
     await loadData();
     dataLoaded = true;
     history.replaceState({ panel: initialPanel }, '', '#' + initialPanel);
+    _currentPanel = null;
     _switchPanel(initialPanel);
     return true;
 }
@@ -1052,7 +1027,8 @@ function applyUIPermissions() {
         jugadores: [ROLES.MARCADORES],
         equipos: [ROLES.MARCADORES],
         torneos: [ROLES.MARCADORES],
-        administracion: [ROLES.MARCADORES]
+        administracion: [ROLES.MARCADORES],
+        categorias: [ROLES.MARCADORES]
     };
 
     Object.entries(tabsPorRol).forEach(([panel, rolesExcluidos]) => {
@@ -1112,13 +1088,14 @@ document.getElementById('logout-btn').addEventListener('click', async () => { aw
 
 // ── Tab Navigation ──
 function _switchPanel(panelId) {
+    if (_currentPanel === panelId) return;
+    _currentPanel = panelId;
     document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.admin-panel').forEach(el => el.classList.remove('active'));
     const btn = document.querySelector('[data-panel="' + panelId + '"]');
     if (btn) btn.classList.add('active');
     const content = document.getElementById('panel-' + panelId);
     if (content) content.classList.add('active');
-    if (panelId === 'resultados') resDataKey = null;
     if (!dataLoaded) return;
     renderPanel(panelId);
 }
@@ -1173,7 +1150,11 @@ async function loadData() {
 }
 
 async function refreshData() {
+    invalidatePartidosCache();
+    _financeDirty = true;
+    _tasasLoaded = false;
     await loadData();
+    _currentPanel = null;
     if (drawSelectedJornadaId) {
         await loadDrawPartidos(drawSelectedJornadaId);
     }
@@ -1193,7 +1174,7 @@ function updateTournamentSelector() {
     const tournaments = getTournaments();
     sel.innerHTML = ids.map(id => {
         const t = tournaments.find(x => x.id === id);
-        const name = t ? t.name : id;
+        const name = t ? (t.name || t.nombre) : (getTournamentName(id) || id);
         return '<option value="' + id + '"' + (id === currentId ? ' selected' : '') + '>' + esc(name) + '</option>';
     }).join('');
 }
@@ -1213,6 +1194,9 @@ function initTournamentSelector() {
                 const { setActiveTournament: setT } = await import('./tournamentRefs.js');
                 setT(newId, { id: newId, ...t });
             }
+            _financeDirty = true;
+            _financeMovimientosCache = [];
+            _tasasLoaded = false;
             await loadData();
             updateTournamentSelector();
             const active = document.querySelector('.admin-panel.active');
@@ -1258,6 +1242,7 @@ function renderPanel(panelId) {
         case 'torneos': renderTournamentPanel(); break;
         case 'administracion': renderAdministracion(); break;
         case 'usuarios': renderUsuarios(); break;
+        case 'categorias': renderCategorias(); break;
     }
 }
 
@@ -1345,7 +1330,8 @@ function renderJugadores() {
     document.getElementById('btn-add-jugador').onclick = () => safeAction(addJugador);
     document.getElementById('jugador-search').addEventListener('input', (e) => {
         jugadorSearchTerm = e.target.value;
-        renderJugadoresList();
+        clearTimeout(_debounceTimers.get('jugador'));
+        _debounceTimers.set('jugador', setTimeout(() => renderJugadoresList(), 150));
     });
     document.getElementById('btn-import-csv').addEventListener('click', () => {
         document.getElementById('csv-file-input').click();
@@ -1508,7 +1494,7 @@ function renderJugadoresList() {
             return '<div class="player-card' + (isOpen ? ' open' : '') + '" data-jugador-id="' + j.id + '">' +
             '<div class="player-header">' +
                 '<div class="player-main">' +
-                    '<div class="player-name">' + esc(shortName(j)) + '</div>' +
+                    '<div class="player-name">' + shortName(j, true) + '</div>' +
                     '<div class="player-meta">' +
                     (j.telefono ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">phone</span> ' + esc(j.telefono) + ' · ' : '') +
                     (j.email ? '<span class="material-symbols-outlined" style="font-size:0.75rem;">email</span> ' + esc(j.email) : '') +
@@ -1845,7 +1831,7 @@ function showCSVPreview(all, nuevos, existentes) {
         (nuevos.length ? '<div style="max-height:200px;overflow-y:auto;margin-bottom:0.75rem;">' +
             nuevos.map(j =>
                 '<div style="font-size:0.8rem;padding:0.3rem 0;border-bottom:1px solid var(--white-5);color:var(--on-surface);">' +
-                esc(shortName(j)) + ' — <span style="color:var(--on-surface-variant-30);">' + esc(j.email) + '</span>' +
+                shortName(j) + ' — <span style="color:var(--on-surface-variant-30);">' + esc(j.email) + '</span>' +
                 '</div>'
             ).join('') + '</div>' : '') +
         '<div class="btn-group-spaced">' +
@@ -2066,7 +2052,7 @@ function renderEquipos() {
                     '<div class="form-group" style="flex:1;margin-bottom:0;"><label>Asignar jugador</label>' +
                     '<select id="assign-player-select">' +
                     '<option value="">— Seleccionar jugador —</option>' +
-                    unassignedPlayers.map(j => '<option value="' + j.id + '">' + esc(shortName(j)) + '</option>').join('') +
+                    unassignedPlayers.map(j => '<option value="' + j.id + '">' + shortName(j) + '</option>').join('') +
                     '</select></div>' +
                     '<button class="btn btn-sm btn-primary" id="btn-assign-player"><span class="material-symbols-outlined" style="font-size:0.8rem;">person_add</span> Asignar</button>' +
                     '</div>';
@@ -2078,7 +2064,7 @@ function renderEquipos() {
                 html += teamPlayers.map(j =>
                     '<div class="player-card" style="margin-bottom:0.4rem;">' +
                     '<div class="player-main">' +
-                    '<div class="player-name" style="font-size:0.82rem;">' + esc(shortName(j)) + '</div>' +
+                    '<div class="player-name" style="font-size:0.82rem;">' + shortName(j, true) + '</div>' +
                     '</div>' +
                     '<div style="display:flex;gap:0.3rem;">' +
                     '<button class="btn btn-sm btn-outline" data-transfer-player="' + j.id + '" title="Cambiar de equipo"><span class="material-symbols-outlined" style="font-size:0.75rem;">swap_horiz</span></button>' +
@@ -2170,7 +2156,7 @@ function renderEquipos() {
         overlay.className = 'modal-overlay';
         overlay.innerHTML =
             '<div class="modal">' +
-            '<h3 style="font-size:0.95rem;">Cambiar equipo de ' + esc(shortName(player)) + '</h3>' +
+            '<h3 style="font-size:0.95rem;">Cambiar equipo de ' + shortName(player, true) + '</h3>' +
             '<div class="form-group"><label>Nuevo equipo</label>' +
             '<select id="transfer-team-select">' +
             '<option value="">— Sin equipo —</option>' +
@@ -2258,17 +2244,8 @@ async function deleteEquipo(id) {
 }
 
 // ═══════════════════════════════════════════
-// DRAW — 7 PARTIDOS POR ENFRENTAMIENTO
+// DRAW — Categorías dinámicas (desde Firestore)
 // ═══════════════════════════════════════════
-const DRAW_CATEGORIAS = [
-    'Masculino Suma 9',
-    'Masculino Suma 10',
-    'Masculino Suma 12',
-    'Masculino 6ta Master',
-    'Femenino Suma 10',
-    'Femenino Suma 12',
-    'Mixto Suma 11'
-];
 
 let drawSelectedJornadaId = null;
 let drawPartidos = [];
@@ -2293,11 +2270,11 @@ async function loadDrawPartidos(jornadaId) {
     }
 }
 
-function renderDraw() {
+async function renderDraw() {
     const panel = document.getElementById('panel-draw');
 
     if (drawSelectedJornadaId) {
-        renderDrawDetail(panel);
+        await renderDrawDetail(panel);
         return;
     }
 
@@ -2332,6 +2309,7 @@ function renderDraw() {
 }
 
 async function renderDrawDetail(panel) {
+    await ensureCategorias();
     const jornada = allJornadas.find(j => j.id === drawSelectedJornadaId);
     if (!jornada) { drawSelectedJornadaId = null; renderDraw(); return; }
 
@@ -2366,15 +2344,16 @@ async function renderDrawDetail(panel) {
         '</div>' +
         '</div>';
 
-    const completeCount = DRAW_CATEGORIAS.filter(cat => drawPartidos.some(p => p.categoria === cat)).length;
-    const allComplete = completeCount === 7;
+    const allCats = getDrawCategoriasTodas();
+    const completeCount = allCats.filter(cat => drawPartidos.some(p => p.categoria === cat.nombre)).length;
+    const allComplete = completeCount === allCats.length;
 
     html += '<div class="card" style="border-left:4px solid ' + (allComplete ? 'var(--secondary)' : 'var(--primary)') + ';">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;">' +
         '<div>' +
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">DRAW</div>' +
         '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">' +
-        completeCount + ' / 7 categorías configuradas' +
+        completeCount + ' / ' + allCats.length + ' categorías configuradas' +
         '</div>' +
         '</div>' +
         (allComplete
@@ -2384,14 +2363,14 @@ async function renderDrawDetail(panel) {
         '</div>';
 
     if (!allComplete) {
-        const missing = DRAW_CATEGORIAS.filter(cat => !drawPartidos.some(p => p.categoria === cat));
+        const missing = getDrawCategoriasActivas().filter(cat => !drawPartidos.some(p => p.categoria === cat.nombre));
         html += '<div class="card" style="border-left:4px solid var(--secondary);">' +
             '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">' +
             '<span class="material-symbols-outlined" style="font-size:0.7rem;">info</span> Pendientes:' +
             '</div>' +
             '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;">' +
             missing.map(cat =>
-                '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + esc(formatCategoria(cat)) + '</span>'
+                '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + esc(formatCategoria(cat.nombre)) + '</span>'
             ).join('') +
             '</div>' +
             '</div>';
@@ -2406,9 +2385,10 @@ async function renderDrawDetail(panel) {
     const teamAPlayers = getPlayersInTeam(jornada.equipo_a_id);
     const teamBPlayers = getPlayersInTeam(jornada.equipo_b_id);
 
-    DRAW_CATEGORIAS.forEach((cat, idx) => {
-        const partido = drawPartidos.find(p => p.categoria === cat);
+    getDrawCategoriasTodas().forEach((cat, idx) => {
+        const partido = drawPartidos.find(p => p.categoria === cat.nombre);
         const num = String(idx + 1).padStart(2, '0');
+        const isInactive = cat.activa === false;
 
         if (partido) {
             const j1Name = getJugadorNombre(partido.jugador_a_1_id);
@@ -2417,10 +2397,10 @@ async function renderDrawDetail(panel) {
             const j4Name = getJugadorNombre(partido.jugador_b_2_id);
             const isEmpty = !partido.jugador_a_1_id && !partido.jugador_a_2_id && !partido.jugador_b_1_id && !partido.jugador_b_2_id;
 
-            html += '<div class="card" style="margin-bottom:0.5rem;">' +
+            html += '<div class="card" style="margin-bottom:0.5rem;' + (isInactive ? 'border-left:4px solid var(--secondary);' : '') + '">' +
                 '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
                 '<div style="flex:1;min-width:0;">' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);margin-bottom:0.3rem;">' + num + ' ' + esc(formatCategoria(cat)) + '</div>';
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);margin-bottom:0.3rem;">' + num + ' ' + esc(formatCategoria(cat.nombre)) + (isInactive ? ' <span class="badge" style="background:var(--secondary-container);color:var(--secondary);font-size:0.55rem;">INACTIVA</span>' : '') + '</div>';
 
             if (isEmpty) {
                 html += '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Sin jugadores asignados</div>';
@@ -2428,16 +2408,16 @@ async function renderDrawDetail(panel) {
                 html += '<div style="display:flex;flex-direction:column;gap:0.25rem;text-align:center;">' +
                     '<div style="font-size:0.78rem;display:flex;align-items:center;justify-content:center;gap:0.3rem;">' +
                     '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';"></span>' +
-                    '<span style="font-weight:500;">' + esc(j1Name || '—') + '</span>' +
+                    '<span style="font-weight:500;">' + (j1Name || '—') + paymentDotHtml(partido.jugador_a_1_id) + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
-                    '<span style="font-weight:500;">' + esc(j2Name || '—') + '</span>' +
+                    '<span style="font-weight:500;">' + (j2Name || '—') + paymentDotHtml(partido.jugador_a_2_id) + '</span>' +
                     '</div>' +
                     '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);text-align:center;font-family:Lexend;font-weight:800;">VS</div>' +
                     '<div style="font-size:0.78rem;display:flex;align-items:center;justify-content:center;gap:0.3rem;">' +
                     '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';"></span>' +
-                    '<span style="font-weight:500;">' + esc(j3Name || '—') + '</span>' +
+                    '<span style="font-weight:500;">' + (j3Name || '—') + paymentDotHtml(partido.jugador_b_1_id) + '</span>' +
                     '<span style="color:var(--on-surface-variant-40);">/</span>' +
-                    '<span style="font-weight:500;">' + esc(j4Name || '—') + '</span>' +
+                    '<span style="font-weight:500;">' + (j4Name || '—') + paymentDotHtml(partido.jugador_b_2_id) + '</span>' +
                     '</div>' +
                     '</div>';
             }
@@ -2449,14 +2429,14 @@ async function renderDrawDetail(panel) {
                 '</div>' +
                 '</div>' +
                 '</div>';
-        } else {
+        } else if (!isInactive) {
             html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
                 '<div style="display:flex;justify-content:space-between;align-items:center;">' +
                 '<div>' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat.nombre)) + '</div>' +
                 '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
                 '</div>' +
-                '<button class="btn btn-sm btn-primary" data-add-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
+                '<button class="btn btn-sm btn-primary" data-add-partido="' + esc(cat.nombre) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
                 '</div>' +
                 '</div>';
         }
@@ -2497,7 +2477,7 @@ async function renderDrawDetail(panel) {
             const j2Val = j2Sel.value;
             j2Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
                 teamAPlayers.filter(p => p.id !== j1Val).map(p =>
-                    '<option value="' + p.id + '"' + (p.id === j2Val ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>'
+                    '<option value="' + p.id + '"' + (p.id === j2Val ? ' selected' : '') + '>' + shortName(p) + '</option>'
                 ).join('');
         };
         j1Sel.addEventListener('change', updatePairOpts);
@@ -2510,7 +2490,7 @@ async function renderDrawDetail(panel) {
             const j4Val = j4Sel.value;
             j4Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
                 teamBPlayers.filter(p => p.id !== j3Val).map(p =>
-                    '<option value="' + p.id + '"' + (p.id === j4Val ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>'
+                    '<option value="' + p.id + '"' + (p.id === j4Val ? ' selected' : '') + '>' + shortName(p) + '</option>'
                 ).join('');
         };
         j3Sel.addEventListener('change', updatePairOpts);
@@ -2529,7 +2509,7 @@ function renderPartidoForm(jornada) {
     const makePlayerOpts = (players, selectedId, excludeId) => {
         return '<option value="">— Seleccionar —</option>' +
             players.filter(p => p.id !== excludeId).map(p =>
-                '<option value="' + p.id + '"' + (p.id === selectedId ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>'
+                '<option value="' + p.id + '"' + (p.id === selectedId ? ' selected' : '') + '>' + shortName(p) + '</option>'
             ).join('');
     };
 
@@ -2593,6 +2573,13 @@ function getJugadorNombre(id) {
     const j = allJugadores.find(x => x.id === id);
     if (!j) return '?';
     return (j.nombre || '').split(' ')[0] + ' ' + (j.apellidos || '').split(' ')[0];
+}
+
+function paymentDotHtml(jugadorId) {
+    if (!jugadorId) return '';
+    const j = allJugadores.find(x => x.id === jugadorId);
+    if (!j || j.pago_recibido || j.exonerado) return '';
+    return '<span style="color:var(--secondary);font-size:1.2rem;vertical-align:super;margin-left:0.2rem;">•</span>';
 }
 
 async function savePartido() {
@@ -2660,6 +2647,7 @@ async function savePartido() {
         }
         editingPartidoId = null;
         drawPartidos = [];
+        invalidatePartidosCache();
         await loadDrawPartidos(jornadaId);
         drawPartidos.forEach(p => p._drawJornadaId = jornadaId);
         renderDraw();
@@ -2681,6 +2669,7 @@ async function deletePartido(partidoId) {
         await deleteDoc(partidoDocRef(drawSelectedJornadaId, partidoId));
         toast('Partido eliminado', 'success');
         drawPartidos = [];
+        invalidatePartidosCache();
         await loadDrawPartidos(drawSelectedJornadaId);
         drawPartidos.forEach(p => p._drawJornadaId = drawSelectedJornadaId);
         renderDraw();
@@ -2709,7 +2698,6 @@ if (typeof window !== 'undefined') {
         if (document.visibilityState === 'hidden') flushDrafts();
     });
 }
-
 
 // ── Score Validation ──
 // Short Set rules:
@@ -3009,6 +2997,7 @@ async function recalculateAllGames() {
         await fixCollection('torneos/' + tid + '/semifinales');
         await fixCollection('torneos/' + tid + '/finales');
         toast('Juegos recalculados: ' + totalFixed + ' corregidos, ' + totalSkipped + ' sin cambios', 'success');
+        invalidatePartidosCache();
     } catch (e) {
         console.error(e);
         toast('Error al recalcular: ' + e.message, 'error');
@@ -3044,12 +3033,18 @@ function equipoRef(equipoId) {
     return doc(db, 'torneos', getActiveTournamentId(), 'equipos', equipoId);
 }
 
-async function ensureResData() {
-    if (!allJornadas.length) return;
-    const key = getActiveTournamentId() + '|' + allJornadas.map(j => j.id).join(',');
-    if (resDataKey === key && resPartidos.length) return;
-    resDataKey = key;
+// ── Shared Partidos Cache ──
+function invalidatePartidosCache() {
+    _partidosCacheKey = null;
+    _partidosCache = [];
+    resDataKey = null;
     resPartidos = [];
+}
+
+async function loadAllPartidos() {
+    const cacheKey = getActiveTournamentId() + '|' + allJornadas.map(j => j.id).join(',');
+    if (_partidosCacheKey === cacheKey && _partidosCache.length) return _partidosCache;
+    _partidosCache = [];
     const loaded = [];
     await Promise.all(allJornadas.map(async j => {
         try {
@@ -3064,10 +3059,42 @@ async function ensureResData() {
                 loaded.push(p);
             });
         } catch (e) {
-            console.error('Error loading res partidos jornada ' + j.id, e);
+            console.error('Error loading partidos jornada ' + j.id, e);
         }
     }));
-    resPartidos = loaded;
+    _partidosCache = loaded;
+    _partidosCacheKey = cacheKey;
+    return _partidosCache;
+}
+
+async function ensureResData() {
+    if (!allJornadas.length) return;
+    const cacheKey = getActiveTournamentId() + '|' + allJornadas.map(j => j.id).join(',');
+    if (_partidosCacheKey === cacheKey && _partidosCache.length) {
+        if (!(resDataKey === cacheKey && resPartidos.length)) {
+            resDataKey = cacheKey;
+            resPartidos = _partidosCache.map(p => ({
+                ...p,
+                _resJornadaId: p._resJornadaId,
+                _jornadaNumero: p._jornadaNumero,
+                _jornadaFecha: p._jornadaFecha,
+                _teamAColor: p._teamAColor,
+                _teamBColor: p._teamBColor
+            }));
+            buildResultScores();
+        }
+        return;
+    }
+    await loadAllPartidos();
+    resPartidos = _partidosCache.map(p => ({
+        ...p,
+        _resJornadaId: p._resJornadaId,
+        _jornadaNumero: p._jornadaNumero,
+        _jornadaFecha: p._jornadaFecha,
+        _teamAColor: p._teamAColor,
+        _teamBColor: p._teamBColor
+    }));
+    resDataKey = cacheKey;
     buildResultScores();
 }
 
@@ -3259,6 +3286,7 @@ async function saveResultado(partidoId) {
             _closed: { set1: true, set2: true, tb1: true, tb2: true, stb: true }
         };
         await applyMatchPoints(partidoId);
+        invalidatePartidosCache();
         const fp = resPartidos.find(x => x.id === partidoId);
         if (fp?._resContainerType === 'semifinal') renderSemifinalDetail();
         else if (fp?._resContainerType === 'final') renderFinalDetail();
@@ -3323,6 +3351,7 @@ async function clearResultado(partidoId) {
             stb_a: null, stb_b: null,
             _closed: {}
         };
+        invalidatePartidosCache();
         renderResultados();
     } catch (e) {
         toast('Error al borrar resultado', 'error');
@@ -3507,6 +3536,7 @@ async function renderResEnCurso(panel) {
 }
 
 async function renderResDetail(panel) {
+    await ensureCategorias();
     const jornada = allJornadas.find(j => j.id === resSelectedJornadaId);
     if (!jornada) { resSelectedJornadaId = null; renderResultados(); return; }
 
@@ -3574,10 +3604,16 @@ async function renderResDetail(panel) {
         html += '<div id="' + collapseId + '" style="display:none;">';
     }
 
-    DRAW_CATEGORIAS.forEach((cat, idx) => {
-        const partido = partidos.find(p => p.categoria === cat);
+    const allCats = getDrawCategoriasTodas();
+    const renderedIds = new Set();
+    allCats.forEach((cat, idx) => {
+        const partido = partidos.find(p => p.categoria === cat.nombre);
         if (!partido) return;
+        renderedIds.add(partido.id);
         html += resCardHtml(partido);
+    });
+    partidos.forEach(p => {
+        if (!renderedIds.has(p.id)) html += resCardHtml(p);
     });
 
     if (isCerrada) {
@@ -3606,7 +3642,7 @@ function resCardHtml(partido) {
     const j3Name = getJugadorNombre(partido.jugador_b_1_id) || '—';
     const j4Name = getJugadorNombre(partido.jugador_b_2_id) || '—';
 
-    const catIdx = DRAW_CATEGORIAS.indexOf(partido.categoria);
+    const catIdx = getDrawCategoriasTodas().findIndex(c => c.nombre === partido.categoria);
     const num = catIdx >= 0 ? String(catIdx + 1) : '?';
 
     const teamAColor = partido._teamAColor || getTeamColor(partido.equipo_a_id) || '#4da6ff';
@@ -3671,9 +3707,9 @@ function resCardHtml(partido) {
         '<div class="match-pair-row res-team-header">' +
         '<div class="match-pair-name" style="flex:1;">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamAColor + ';margin-right:0.3rem;vertical-align:middle;"></span>' +
-        esc(j1Name + ' / ' + j2Name) + '</div>' +
+        esc(j1Name) + paymentDotHtml(partido.jugador_a_1_id) + ' / ' + esc(j2Name) + paymentDotHtml(partido.jugador_a_2_id) + '</div>' +
         '<div class="match-pair-name" style="flex:1;text-align:right;">' +
-        esc(j3Name + ' / ' + j4Name) +
+        esc(j3Name) + paymentDotHtml(partido.jugador_b_1_id) + ' / ' + esc(j4Name) + paymentDotHtml(partido.jugador_b_2_id) +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + teamBColor + ';margin-left:0.3rem;vertical-align:middle;"></span>' +
         '</div>' +
         '</div>' +
@@ -3746,14 +3782,14 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
         '<div class="res-public-player">' +
         '<div class="res-public-dot" style="background:' + teamAColor + ';"></div>' +
         '<div>' +
-        '<div class="res-public-name">' + esc(j1Name + ' / ' + j2Name) + '</div>' +
+        '<div class="res-public-name">' + esc(j1Name) + paymentDotHtml(partido.jugador_a_1_id) + ' / ' + esc(j2Name) + paymentDotHtml(partido.jugador_a_2_id) + '</div>' +
         '</div>' +
         '<div class="res-public-score">' + scoreA + '</div>' +
         '</div>' +
         '<div class="res-public-player">' +
         '<div class="res-public-dot" style="background:' + teamBColor + ';"></div>' +
         '<div>' +
-        '<div class="res-public-name">' + esc(j3Name + ' / ' + j4Name) + '</div>' +
+        '<div class="res-public-name">' + esc(j3Name) + paymentDotHtml(partido.jugador_b_1_id) + ' / ' + esc(j4Name) + paymentDotHtml(partido.jugador_b_2_id) + '</div>' +
         '</div>' +
         '<div class="res-public-score">' + scoreB + '</div>' +
         '</div>' +
@@ -3767,10 +3803,13 @@ function resCardCompactHtml(partido, rs, j1Name, j2Name, j3Name, j4Name, teamACo
 
 function bindResPanelEvents(panel) {
     document.getElementById('result-search')?.addEventListener('input', () => {
-        const term = document.getElementById('result-search').value.toLowerCase();
-        panel.querySelectorAll('.card, .res-public-card').forEach(card => {
-            card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
-        });
+        clearTimeout(_debounceTimers.get('result'));
+        _debounceTimers.set('result', setTimeout(() => {
+            const term = document.getElementById('result-search').value.toLowerCase();
+            panel.querySelectorAll('.card, .res-public-card').forEach(card => {
+                card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
+            });
+        }, 150));
     });
 
     panel.querySelectorAll('[data-res-view]').forEach(b => b.addEventListener('click', () => {
@@ -3986,24 +4025,16 @@ let allEnfrentamientosData = [];
 async function loadAllEnfrentamientosAndPartidos() {
     allEnfrentamientosData = [];
     if (!getActiveTournamentId()) return;
-    try {
-        const results = await Promise.all(allJornadas.map(async jornada => {
-            const partSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos'));
-            const partidos = partSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-            return {
-                id: jornada.id,
-                equipo_a_id: jornada.equipo_a_id,
-                equipo_b_id: jornada.equipo_b_id,
-                _jornadaId: jornada.id,
-                _jornadaNumero: jornada.numero,
-                cerrada: jornada.cerrada === true,
-                partidos
-            };
-        }));
-        allEnfrentamientosData = results;
-    } catch (e) {
-        console.error('Error loading jornadas for standings:', e);
-    }
+    await loadAllPartidos();
+    allEnfrentamientosData = allJornadas.map(j => ({
+        id: j.id,
+        equipo_a_id: j.equipo_a_id,
+        equipo_b_id: j.equipo_b_id,
+        _jornadaId: j.id,
+        _jornadaNumero: j.numero,
+        cerrada: j.cerrada === true,
+        partidos: _partidosCache.filter(p => p._resJornadaId === j.id)
+    }));
 }
 
 function renderPosiciones() {
@@ -4014,6 +4045,11 @@ function renderPosiciones() {
         const result = calculateStandings(allEquipos, allEnfrentamientosData);
         const { standings, roundStatus, totalEnfrentamientos, completedEnfrentamientos } = result;
         const allComplete = roundStatus === 'finalizado';
+
+        if (!standings.length) {
+            panel.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>Aún no hay equipos configurados</p></div>';
+            return;
+        }
 
         let html = '';
 
@@ -4028,55 +4064,59 @@ function renderPosiciones() {
             '</div>' +
             '</div>';
 
-        if (!standings.length) {
-            html += '<div class="empty-state" style="padding:2rem;"><span class="material-symbols-outlined">leaderboard</span><p>No hay equipos configurados.<br>Creá equipos desde el módulo Equipos.</p></div>';
-            panel.innerHTML = html;
-            return;
-        }
+        // Header de stats
+        html += '<div class="card" style="margin-bottom:0.5rem;padding:0.5rem 0.75rem;">' +
+            '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">' +
+            '<div style="min-width:1.5rem;"></div>' +
+            '<div style="flex:1;"></div>' +
+            '<div style="display:flex;gap:0.5rem;">' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">JJ</span></div>' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">JG</span></div>' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PJ</span></div>' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PG</span></div>' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PP</span></div>' +
+            '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">PTS</span></div>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
 
-        // Standings table (mobile-friendly cards)
+        // Standings cards
         standings.forEach((s, i) => {
             const isQualified = i < 4;
             const qualBorder = isQualified ? 'border-left:4px solid ' + s.color + ';' : 'border-left:4px solid var(--white-8);';
             const qualBg = isQualified ? 'background:rgba(255,255,255,0.03);' : '';
 
             html += '<div class="card" style="' + qualBorder + qualBg + 'margin-bottom:0.5rem;">' +
-                '<div style="display:flex;align-items:flex-start;justify-content:space-between;">' +
-                '<div style="display:flex;align-items:center;gap:0.6rem;">' +
-                '<div style="min-width:1.8rem;text-align:center;">' +
-                '<div style="font-family:Lexend;font-weight:800;font-size:1.1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
+                '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+                '<div style="min-width:1.5rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
                 '</div>' +
-                '<div>' +
-                '<div style="display:flex;align-items:center;gap:0.3rem;">' +
-                '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + s.color + ';"></span>' +
-                '<span style="font-family:Lexend;font-weight:600;font-size:0.88rem;">' + esc(s.nombre) + '</span>' +
+                '<div style="flex:1;display:flex;align-items:center;gap:0.4rem;min-width:0;">' +
+                '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.nombre) + '</span>' +
                 '</div>' +
-                (isQualified ? '<div style="font-size:0.65rem;color:var(--secondary);font-weight:600;margin-top:0.1rem;"><span class="material-symbols-outlined" style="font-size:0.6rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '<div style="font-size:0.65rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">Sin clasificación</div>') +
+                '<div style="display:flex;gap:0.5rem;">' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.jornadas_disputadas + '</div>' +
                 '</div>' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--primary);">' + s.jornadas_ganadas + '</div>' +
                 '</div>' +
-                '<div style="text-align:right;">' +
-                '<div style="font-family:Lexend;font-weight:800;font-size:1.2rem;color:var(--primary);">' + s.puntos + '</div>' +
-                '<div style="font-size:0.62rem;color:var(--on-surface-variant-40);text-transform:uppercase;letter-spacing:0.5px;">PUNTOS</div>' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_jugados + '</div>' +
                 '</div>' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + s.partidos_ganados + '</div>' +
                 '</div>' +
-                '<div style="display:flex;gap:0.6rem;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--white-5);flex-wrap:wrap;">' +
-                '<div style="flex:1;min-width:3rem;text-align:center;">' +
-                '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.jornadas_disputadas + '</div>' +
-                '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PJ</div>' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_perdidos + '</div>' +
                 '</div>' +
-                '<div style="flex:1;min-width:3rem;text-align:center;">' +
-                '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.jornadas_ganadas + '</div>' +
-                '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PG</div>' +
-                '</div>' +
-                '<div style="flex:1;min-width:3rem;text-align:center;">' +
-                '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.partidos_ganados + '</div>' +
-                '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">PARTIDOS</div>' +
-                '</div>' +
-                '<div style="flex:1;min-width:3rem;text-align:center;">' +
-                '<div style="font-family:Lexend;font-weight:700;font-size:0.85rem;">' + s.juegos_ganados + '</div>' +
-                '<div style="font-size:0.6rem;color:var(--on-surface-variant-40);">JG</div>' +
+                '<div style="min-width:2.2rem;text-align:center;">' +
+                '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:var(--primary);">' + s.puntos + '</div>' +
                 '</div>' +
                 '</div>' +
+                '</div>' +
+                (isQualified ? '<div style="font-size:0.6rem;color:var(--secondary);font-weight:600;margin-top:0.2rem;padding-top:0.2rem;border-top:1px solid var(--white-5);"><span class="material-symbols-outlined" style="font-size:0.55rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '') +
                 '</div>';
         });
 
@@ -4106,7 +4146,7 @@ function renderPosiciones() {
                 '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">3º ' + esc(s3.nombre) + '</span>' +
                 '</div></div>' +
                 '</div>' +
-                (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se actualizarán con los resultados finales</div>') +
+                (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se definirán al finalizar el Round Robin</div>') +
                 '</div>';
         } else if (standings.length > 0) {
             html += '<div class="card" style="border-top:3px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
@@ -4115,8 +4155,16 @@ function renderPosiciones() {
                 '</div>';
         }
 
-        html += '<div style="font-size:0.65rem;color:var(--on-surface-variant-40);text-align:center;margin-top:0.75rem;">' +
-            'PJ = Jornadas Disputadas · PG = Jornadas Ganadas · PARTIDOS = Partidos Ganados · JG = Juegos Ganados' +
+        // Leyenda
+        html += '<div class="card" style="border-left:4px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
+            '<div style="font-family:Lexend;font-weight:600;font-size:0.8rem;margin-bottom:0.6rem;color:var(--on-surface-variant-40);"><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle;">info</span> CÁLCULO DE PUNTOS</div>' +
+            '<div style="display:flex;flex-direction:column;gap:0.4rem;font-size:0.72rem;color:var(--on-surface-variant-40);">' +
+            '<div><span style="font-weight:600;">JJ (Jornadas Disputadas):</span> Total de jornadas jugadas por el equipo.</div>' +
+            '<div><span style="font-weight:600;color:var(--primary);">JG (Jornadas Ganadas):</span> Se gana la jornada con 4+ partidos ganados. +5 puntos bonus.</div>' +
+            '<div><span style="font-weight:600;color:var(--secondary);">PG (Partidos Ganados):</span> Cada partido ganado suma +1 punto.</div>' +
+            '<div><span style="font-weight:600;">PP (Partidos Perdidos):</span> Los partidos perdidos no suman puntos.</div>' +
+            '<div><span style="font-weight:600;">PJ (Partidos Jugados):</span> Total de partidos finalizados/completados.</div>' +
+            '</div>' +
             '</div>';
 
         panel.innerHTML = html;
@@ -4174,11 +4222,11 @@ function renderJornadas() {
 
     // Create/Edit jornada form
     html += '<div class="card">' +
-        '<button class="collapse-toggle" id="j-toggle-form" type="button" aria-expanded="' + (isEditing ? 'true' : 'false') + '">' +
+        '<button class="collapse-toggle" id="jor-toggle-form" type="button" aria-expanded="' + (isEditing ? 'true' : 'false') + '">' +
         '<span class="collapse-toggle-left"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary);">calendar_today</span> ' + (isEditing ? 'Editar Jornada' : 'Nueva Jornada') + '</span>' +
         '<span class="material-symbols-outlined chevron">' + (isEditing ? 'expand_less' : 'expand_more') + '</span>' +
         '</button>' +
-        '<div id="j-form-body" style="display:' + (isEditing ? 'block' : 'none') + ';">' +
+        '<div id="jor-form-body" style="display:' + (isEditing ? 'block' : 'none') + ';">' +
         '<div class="form-row">' +
         '<div class="form-group" style="flex:1;"><label>Fecha</label><input type="date" id="j-fecha" value="' + (jEdit && jEdit.fecha ? (jEdit.fecha.toDate ? jEdit.fecha.toDate().toISOString().split('T')[0] : new Date(jEdit.fecha).toISOString().split('T')[0]) : '') + '"></div>' +
         '</div>' +
@@ -4242,9 +4290,9 @@ function renderJornadas() {
     panel.innerHTML = html;
 
     // Event listeners — Jornada form
-    document.getElementById('j-toggle-form')?.addEventListener('click', () => {
-        const body = document.getElementById('j-form-body');
-        const btn = document.getElementById('j-toggle-form');
+    document.getElementById('jor-toggle-form')?.addEventListener('click', () => {
+        const body = document.getElementById('jor-form-body');
+        const btn = document.getElementById('jor-toggle-form');
         const open = body.style.display !== 'none';
         body.style.display = open ? 'none' : 'block';
         btn.classList.toggle('open', !open);
@@ -4339,7 +4387,7 @@ async function cerrarJornada(jornadaId) {
 
     const partidos = resPartidos.filter(p => p._resJornadaId === jornadaId);
     const finalizados = partidos.filter(p => p.estado === 'finalizado');
-    const total = partidos.length || 7;
+    const total = partidos.length || getDrawCategoriasActivas().length;
 
     let aWins = 0, bWins = 0, empates = 0;
     finalizados.forEach(p => {
@@ -4472,14 +4520,14 @@ async function loadSemifinales() {
     if (!getActiveTournamentId()) return;
     try {
         const snap = await getDocs(semiCol());
-        for (const docSnap of snap.docs) {
+        if (!snap.docs.length) return;
+        const results = await Promise.all(snap.docs.map(async docSnap => {
             const semi = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(semiPartidoCol(semi.id));
-            for (const p of partSnap.docs) {
-                semi.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
-            }
-            allSemifinales.push(semi);
-        }
+            semi.partidos = partSnap.docs.map(p => ({ id: p.id, ...normalizeFields(p.data()) }));
+            return semi;
+        }));
+        allSemifinales = results;
     } catch (e) {
         console.error('Error loading semifinales:', e);
     }
@@ -4563,8 +4611,10 @@ async function generateSemifinales() {
 async function doGenerateSemifinales(s) {
     showLoading('Generando semifinales...');
     try {
-        const semifinal1 = { equipo_a_id: s[0].id, equipo_a_nombre: s[0].nombre, equipo_a_posicion: 1, equipo_a_color: s[0].color, equipo_b_id: s[3].id, equipo_b_nombre: s[3].nombre, equipo_b_posicion: 4, equipo_b_color: s[3].color, ganador_equipo_id: null, estado: 'pendiente', numero: 1 };
-        const semifinal2 = { equipo_a_id: s[1].id, equipo_a_nombre: s[1].nombre, equipo_a_posicion: 2, equipo_a_color: s[1].color, equipo_b_id: s[2].id, equipo_b_nombre: s[2].nombre, equipo_b_posicion: 3, equipo_b_color: s[2].color, ganador_equipo_id: null, estado: 'pendiente', numero: 2 };
+        await ensureCategorias();
+        const catCount = getDrawCategoriasActivas().length;
+        const semifinal1 = { equipo_a_id: s[0].id, equipo_a_nombre: s[0].nombre, equipo_a_posicion: 1, equipo_a_color: s[0].color, equipo_b_id: s[3].id, equipo_b_nombre: s[3].nombre, equipo_b_posicion: 4, equipo_b_color: s[3].color, ganador_equipo_id: null, estado: 'pendiente', numero: 1, partidos_esperados: catCount };
+        const semifinal2 = { equipo_a_id: s[1].id, equipo_a_nombre: s[1].nombre, equipo_a_posicion: 2, equipo_a_color: s[1].color, equipo_b_id: s[2].id, equipo_b_nombre: s[2].nombre, equipo_b_posicion: 3, equipo_b_color: s[2].color, ganador_equipo_id: null, estado: 'pendiente', numero: 2, partidos_esperados: catCount };
 
         await Promise.all([addDoc(semiCol(), semifinal1), addDoc(semiCol(), semifinal2)]);
 
@@ -4779,7 +4829,7 @@ async function clearSemiResultado() {
 async function checkSemiWinner(semiId) {
     const semi = allSemifinales.find(s => s.id === semiId);
     if (!semi) return;
-    const allDone = semiPartidos.length === 7 && semiPartidos.every(p => p.estado === 'finalizado');
+    const allDone = semiPartidos.length === (semi.partidos_esperados || 7) && semiPartidos.every(p => p.estado === 'finalizado');
     if (!allDone) return;
 
     let aWins = 0, bWins = 0;
@@ -4875,6 +4925,186 @@ function cerrarSemifinal(semiId) {
     });
 }
 
+async function renderCategorias() {
+    const panel = document.getElementById('panel-categorias');
+    if (!panel) return;
+    panelLoading(panel);
+
+    await ensureCategorias();
+    const cats = getDrawCategoriasTodas();
+    const tieneCats = cats.length > 0;
+
+    let html = '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sell</span> Categorías del Torneo</div>';
+
+    if (!tieneCats) {
+        html += '<div class="card" style="border-left:4px solid var(--secondary);">' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.5rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--secondary);">info</span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.85rem;">No hay categorías configuradas</span>' +
+            '</div>' +
+            '<p style="font-size:0.8rem;color:var(--on-surface-variant-40);margin-bottom:0.75rem;">Inicializa con las 7 categorías predeterminadas o crea categorías personalizadas.</p>' +
+            '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">' +
+            '<button class="btn btn-primary" id="btn-seed-categorias"><span class="material-symbols-outlined" style="font-size:0.8rem;">add_circle</span> Inicializar con las categorías actuales</button>' +
+            '<button class="btn btn-outline" id="btn-add-cat-empty"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span> Crear categoría</button>' +
+            '</div>' +
+            '</div>';
+    } else {
+        html += '<div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">' +
+            '<button class="btn btn-primary" id="btn-add-cat"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span> Nueva categoría</button>' +
+            '</div>';
+
+        html += '<div style="display:flex;flex-direction:column;gap:0.5rem;">';
+        cats.forEach(cat => {
+            const isActive = cat.activa !== false;
+            const badgeStyle = isActive
+                ? 'background:var(--secondary-container);color:var(--secondary);'
+                : 'background:var(--white-8);color:var(--on-surface-variant-40);';
+            const badgeText = isActive ? 'ACTIVA' : 'INACTIVA';
+            const cardBorder = isActive ? 'border-left:4px solid var(--primary);' : 'border-left:4px solid var(--on-surface-variant-40);opacity:0.7;';
+
+            html += '<div class="card" style="margin:0;padding:0.75rem;' + cardBorder + '">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<div style="display:flex;align-items:center;gap:0.6rem;">' +
+                '<span class="material-symbols-outlined" style="font-size:1rem;color:var(--primary);">sell</span>' +
+                '<div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">' + esc(cat.nombre) + '</div>' +
+                '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">' + (cat.creadaEn ? new Date(cat.creadaEn).toLocaleDateString('es-AR') : '') + '</div>' +
+                '</div>' +
+                '<span class="badge" style="font-size:0.6rem;' + badgeStyle + '">' + badgeText + '</span>' +
+                '</div>' +
+                '<div style="display:flex;gap:0.3rem;">' +
+                '<button class="btn btn-sm btn-outline" data-edit-cat="' + cat.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span></button>' +
+                '<button class="btn btn-sm btn-outline" data-toggle-cat="' + cat.id + '" title="' + (isActive ? 'Desactivar' : 'Activar') + '"><span class="material-symbols-outlined" style="font-size:0.8rem;">' + (isActive ? 'visibility_off' : 'visibility') + '</span></button>' +
+                '</div>' +
+                '</div>' +
+                '</div>';
+        });
+        html += '</div>';
+    }
+
+    panel.innerHTML = html;
+
+    // Event listeners
+    panel.querySelectorAll('#btn-seed-categorias').forEach(btn => btn.addEventListener('click', async () => {
+        showLoading();
+        try {
+            await seedCategoriasDefault();
+            await ensureCategorias();
+            toast('Categorías inicializadas');
+            renderCategorias();
+        } catch (e) {
+            toast('Error al inicializar', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    }));
+
+    panel.querySelectorAll('#btn-add-cat, #btn-add-cat-empty').forEach(btn => btn.addEventListener('click', () => {
+        renderCategoriaForm(null);
+    }));
+
+    panel.querySelectorAll('[data-edit-cat]').forEach(btn => btn.addEventListener('click', () => {
+        const catId = btn.dataset.editCat;
+        const cat = cats.find(c => c.id === catId);
+        if (cat) renderCategoriaForm(cat);
+    }));
+
+    panel.querySelectorAll('[data-toggle-cat]').forEach(btn => btn.addEventListener('click', async () => {
+        const catId = btn.dataset.toggleCat;
+        const cat = cats.find(c => c.id === catId);
+        if (!cat) return;
+        showLoading();
+        try {
+            await setCategoriaActiva(catId, cat.activa === false);
+            await ensureCategorias();
+            toast(cat.activa === false ? 'Categoría activada' : 'Categoría desactivada');
+            renderCategorias();
+        } catch (e) {
+            toast('Error al cambiar estado', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    }));
+}
+
+function renderCategoriaForm(existingCat) {
+    const panel = document.getElementById('panel-categorias');
+    if (!panel) return;
+
+    const isEdit = !!existingCat;
+    const title = isEdit ? 'Editar Categoría' : 'Nueva Categoría';
+    const nombre = existingCat ? existingCat.nombre : '';
+
+    let html = '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sell</span> ' + title + '</div>';
+    html += '<div class="card">';
+    html += '<div class="form-group"><label>Nombre de la categoría</label>';
+    html += '<input type="text" id="cat-nombre" class="form-input" value="' + esc(nombre) + '" placeholder="Ej: Masculino Suma 9" style="width:100%;max-width:320px;"></div>';
+    html += '<div style="display:flex;gap:0.5rem;margin-top:0.75rem;">';
+    html += '<button class="btn btn-primary" id="btn-cat-save">' + (isEdit ? 'Guardar cambios' : 'Crear categoría') + '</button>';
+    html += '<button class="btn btn-outline" id="btn-cat-cancel">Cancelar</button>';
+    if (isEdit) {
+        html += '<button class="btn btn-danger" id="btn-cat-delete" style="margin-left:auto;"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span> Eliminar</button>';
+    }
+    html += '</div></div>';
+
+    panel.innerHTML = html;
+
+    document.getElementById('btn-cat-cancel').addEventListener('click', () => renderCategorias());
+    document.getElementById('btn-cat-save').addEventListener('click', async () => {
+        const newName = document.getElementById('cat-nombre').value.trim();
+        if (!newName) { toast('Ingresá un nombre', 'error'); return; }
+
+        const allCats = getDrawCategoriasTodas();
+        if (!isEdit && allCats.some(c => normalizeCatName(c.nombre) === normalizeCatName(newName))) {
+            toast('Ya existe una categoría con ese nombre', 'error');
+            return;
+        }
+        if (isEdit && normalizeCatName(newName) !== normalizeCatName(existingCat.nombre) && allCats.some(c => normalizeCatName(c.nombre) === normalizeCatName(newName))) {
+            toast('Ya existe otra categoría con ese nombre', 'error');
+            return;
+        }
+
+        showLoading();
+        try {
+            if (isEdit) {
+                await editarCategoria(existingCat.id, { nombre: newName });
+            } else {
+                await crearCategoria({ nombre: newName });
+            }
+            await ensureCategorias();
+            toast(isEdit ? 'Categoría actualizada' : 'Categoría creada');
+            renderCategorias();
+        } catch (e) {
+            toast('Error al guardar', 'error');
+            console.error(e);
+        } finally {
+            hideLoading();
+        }
+    });
+
+    if (isEdit) {
+        document.getElementById('btn-cat-delete').addEventListener('click', async () => {
+            if (!confirm('¿Eliminar esta categoría? Los partidos existentes no se borran pero no se mostrarán en el panel.')) return;
+            showLoading();
+            try {
+                await setCategoriaActiva(existingCat.id, false);
+                await ensureCategorias();
+                toast('Categoría desactivada');
+                renderCategorias();
+            } catch (e) {
+                toast('Error al eliminar', 'error');
+                console.error(e);
+            } finally {
+                hideLoading();
+            }
+        });
+    }
+
+    document.getElementById('cat-nombre').focus();
+}
+
 function renderSemifinales() {
     const panel = document.getElementById('panel-semifinales');
     if (selectedSemifinalId) {
@@ -4920,7 +5150,7 @@ function renderSemifinales() {
         allSemifinales.forEach(semi => {
             const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
             const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
-            const allDone = semi.partidos.length === 7 && semi.partidos.every(p => p.estado === 'finalizado');
+            const allDone = semi.partidos.length === (semi.partidos_esperados || 7) && semi.partidos.every(p => p.estado === 'finalizado');
             let aWins = 0, bWins = 0;
             semi.partidos.forEach(p => {
                 if (p.ganador_equipo_id === semi.equipo_a_id) aWins++;
@@ -4948,7 +5178,7 @@ function renderSemifinales() {
                 '<span style="font-size:0.75rem;">' + aWins + ' - ' + bWins + '</span>' +
                 (ganadorName
                     ? '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">emoji_events</span> ' + esc(ganadorName) + '</span>'
-                    : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/7 finalizados</span>') +
+                    : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/' + (semi.partidos_esperados || 7) + ' finalizados</span>') +
                 '</div>' +
                 '</div>';
         });
@@ -4964,14 +5194,15 @@ function renderSemifinales() {
     });
 }
 
-function renderSemifinalDetail() {
+async function renderSemifinalDetail() {
+    await ensureCategorias();
     const panel = document.getElementById('panel-semifinales');
     const semi = allSemifinales.find(s => s.id === selectedSemifinalId);
     if (!semi) { selectedSemifinalId = null; renderSemifinales(); return; }
 
     const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
     const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
-    const allDone = semi.partidos.length === 7 && semi.partidos.every(p => p.estado === 'finalizado');
+    const allDone = semi.partidos.length === (semi.partidos_esperados || 7) && semi.partidos.every(p => p.estado === 'finalizado');
     let aWins = 0, bWins = 0;
     semi.partidos.forEach(p => {
         if (p.ganador_equipo_id === semi.equipo_a_id) aWins++;
@@ -5008,7 +5239,7 @@ function renderSemifinalDetail() {
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">Resumen</div>' +
         (allDone
             ? '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">check_circle</span> Completo</span>'
-            : '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/7</span>') +
+            : '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/' + (semi.partidos_esperados || 7) + '</span>') +
         '</div>' +
         '<div style="display:flex;gap:1rem;">' +
         '<div style="flex:1;"><div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(semi.equipo_a_nombre) + '</div>' +
@@ -5071,11 +5302,14 @@ function renderSemifinalDetail() {
     }
 
     // Partidos list
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + semi.partidos.length + '/7)</div>';
+    const allCats = getDrawCategoriasTodas();
+    const expectedSemi = semi.partidos_esperados || 7;
+    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + semi.partidos.length + '/' + expectedSemi + ')</div>';
 
-    DRAW_CATEGORIAS.forEach((cat, idx) => {
-        const partido = semi.partidos.find(p => p.categoria === cat);
+    allCats.forEach((cat, idx) => {
+        const partido = semi.partidos.find(p => p.categoria === cat.nombre);
         const num = String(idx + 1).padStart(2, '0');
+        const isInactive = cat.activa === false;
 
         if (partido) {
             const isFinalizado = partido.estado === 'finalizado';
@@ -5087,11 +5321,11 @@ function renderSemifinalDetail() {
 
             const borderColor = isFinalizado ? (partido.ganador_equipo_id === semi.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
 
-            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';' + (isInactive ? 'opacity:0.7;' : '') + '">' +
                 '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
                 '<div style="flex:1;min-width:0;">' +
                 '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat.nombre)) + (isInactive ? ' <span class="badge" style="background:var(--secondary-container);color:var(--secondary);font-size:0.55rem;">INACTIVA</span>' : '') + '</span>' +
                 (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
                 '</div>';
 
@@ -5128,14 +5362,14 @@ function renderSemifinalDetail() {
                 '<button class="btn btn-sm btn-outline" data-semi-edit="' + partido.id + '" title="Editar score"><span class="material-symbols-outlined" style="font-size:0.8rem;">sports_score</span></button>' +
                 '<button class="btn btn-sm btn-danger" data-del-semi-partido="' + partido.id + '" title="Eliminar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
                 '</div></div></div>';
-        } else {
+        } else if (!isInactive) {
             html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
                 '<div style="display:flex;justify-content:space-between;align-items:center;">' +
                 '<div>' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat.nombre)) + '</div>' +
                 '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
                 '</div>' +
-                '<button class="btn btn-sm btn-primary" data-add-semi-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
+                '<button class="btn btn-sm btn-primary" data-add-semi-partido="' + esc(cat.nombre) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
                 '</div></div>';
         }
     });
@@ -5201,7 +5435,7 @@ function renderSemifinalDetail() {
             const v1 = j1Sel.value;
             const players = getPlayersInTeam(semi.equipo_a_id);
             j2Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                players.filter(p => p.id !== v1).map(p => '<option value="' + p.id + '"' + (p.id === j2Sel.value ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+                players.filter(p => p.id !== v1).map(p => '<option value="' + p.id + '"' + (p.id === j2Sel.value ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
         };
         j1Sel.addEventListener('change', updatePair);
     }
@@ -5210,7 +5444,7 @@ function renderSemifinalDetail() {
             const v3 = j3Sel.value;
             const players = getPlayersInTeam(semi.equipo_b_id);
             j4Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                players.filter(p => p.id !== v3).map(p => '<option value="' + p.id + '"' + (p.id === j4Sel.value ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+                players.filter(p => p.id !== v3).map(p => '<option value="' + p.id + '"' + (p.id === j4Sel.value ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
         };
         j3Sel.addEventListener('change', updatePair);
     }
@@ -5224,7 +5458,7 @@ function renderSemiPartidoForm(semi, existingPart) {
     const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
     const aPlayers = getPlayersInTeam(semi.equipo_a_id);
     const bPlayers = getPlayersInTeam(semi.equipo_b_id);
-    const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+    const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
 
     const j1 = existingPart?.jugador_a_1_id || '';
     const j2 = existingPart?.jugador_a_2_id || '';
@@ -5358,14 +5592,14 @@ async function loadFinales() {
     if (!getActiveTournamentId()) return;
     try {
         const snap = await getDocs(finalCol());
-        for (const docSnap of snap.docs) {
+        if (!snap.docs.length) return;
+        const results = await Promise.all(snap.docs.map(async docSnap => {
             const fin = { id: docSnap.id, ...normalizeFields(docSnap.data()), partidos: [] };
             const partSnap = await getDocs(finalPartidoCol(fin.id));
-            for (const p of partSnap.docs) {
-                fin.partidos.push({ id: p.id, ...normalizeFields(p.data()) });
-            }
-            allFinales.push(fin);
-        }
+            fin.partidos = partSnap.docs.map(p => ({ id: p.id, ...normalizeFields(p.data()) }));
+            return fin;
+        }));
+        allFinales = results;
     } catch (e) {
         console.error('Error loading finales:', e);
     }
@@ -5474,11 +5708,13 @@ async function generateFinal() {
 async function doGenerateFinal(id1, name1, color1, id2, name2, color2) {
     showLoading('Generando final...');
     try {
+        await ensureCategorias();
+        const catCount = getDrawCategoriasActivas().length;
         await loadFinales();
         const finalData = {
             equipo_a_id: id1, equipo_a_nombre: name1, equipo_a_color: color1 || '#888',
             equipo_b_id: id2, equipo_b_nombre: name2, equipo_b_color: color2 || '#888',
-            ganador_equipo_id: null, estado: 'pendiente', numero: 1
+            ganador_equipo_id: null, estado: 'pendiente', numero: 1, partidos_esperados: catCount
         };
 
         if (allFinales.length > 0) {
@@ -5696,7 +5932,7 @@ async function clearFinalResultado() {
 async function checkFinalWinner(finalId) {
     const fin = allFinales.find(f => f.id === finalId);
     if (!fin) return;
-    const allDone = finalPartidos.length === 7 && finalPartidos.every(p => p.estado === 'finalizado');
+    const allDone = finalPartidos.length === (fin.partidos_esperados || 7) && finalPartidos.every(p => p.estado === 'finalizado');
     if (!allDone) return;
 
     let aWins = 0, bWins = 0;
@@ -5853,7 +6089,7 @@ function renderFinal() {
                 '<span style="font-size:0.75rem;">' + aWins + ' - ' + bWins + '</span>' +
                 (campeon
                     ? '<span class="badge badge-success" style="font-size:0.65rem;"><span class="material-symbols-outlined" style="font-size:0.6rem;">workspace_premium</span> 🏆 CAMPEÓN: ' + esc(campeon) + '</span>'
-                    : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/7 finalizados</span>') +
+                    : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/' + (fin.partidos_esperados || 7) + ' finalizados</span>') +
                 '</div></div>';
         });
 
@@ -5867,14 +6103,15 @@ function renderFinal() {
     });
 }
 
-function renderFinalDetail() {
+async function renderFinalDetail() {
+    await ensureCategorias();
     const panel = document.getElementById('panel-final');
     const fin = allFinales.find(f => f.id === selectedFinalId);
     if (!fin) { selectedFinalId = null; renderFinal(); return; }
 
     const aColor = fin.equipo_a_color || getTeamColor(fin.equipo_a_id) || '#888';
     const bColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888';
-    const allDone = fin.partidos.length === 7 && fin.partidos.every(p => p.estado === 'finalizado');
+    const allDone = fin.partidos.length === (fin.partidos_esperados || 7) && fin.partidos.every(p => p.estado === 'finalizado');
     let aWins = 0, bWins = 0;
     fin.partidos.forEach(p => {
         if (p.ganador_equipo_id === fin.equipo_a_id) aWins++;
@@ -5911,7 +6148,7 @@ function renderFinalDetail() {
         '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">Resumen</div>' +
         (allDone
             ? '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">check_circle</span> Completo</span>'
-            : '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/7</span>') +
+            : '<span class="badge" style="background:var(--primary-container);color:var(--primary);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/' + (fin.partidos_esperados || 7) + '</span>') +
         '</div>' +
         '<div style="display:flex;gap:1rem;">' +
         '<div style="flex:1;"><div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + aColor + ';"></span> ' + esc(fin.equipo_a_nombre) + '</div>' +
@@ -5975,11 +6212,14 @@ function renderFinalDetail() {
     }
 
     // Partidos list
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + fin.partidos.length + '/7)</div>';
+    const allCats = getDrawCategoriasTodas();
+    const expectedFinal = fin.partidos_esperados || 7;
+    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">sports_tennis</span> Partidos (' + fin.partidos.length + '/' + expectedFinal + ')</div>';
 
-    DRAW_CATEGORIAS.forEach((cat, idx) => {
-        const partido = fin.partidos.find(p => p.categoria === cat);
+    allCats.forEach((cat, idx) => {
+        const partido = fin.partidos.find(p => p.categoria === cat.nombre);
         const num = String(idx + 1).padStart(2, '0');
+        const isInactive = cat.activa === false;
 
         if (partido) {
             const isFinalizado = partido.estado === 'finalizado';
@@ -5991,11 +6231,11 @@ function renderFinalDetail() {
 
             const borderColor = isFinalizado ? (partido.ganador_equipo_id === fin.equipo_a_id ? aColor : bColor) : 'var(--on-surface-variant-40)';
 
-            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';">' +
+            html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid ' + borderColor + ';' + (isInactive ? 'opacity:0.7;' : '') + '">' +
                 '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
                 '<div style="flex:1;min-width:0;">' +
                 '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">' +
-                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat)) + '</span>' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--primary);">' + num + ' ' + esc(formatCategoria(cat.nombre)) + (isInactive ? ' <span class="badge" style="background:var(--secondary-container);color:var(--secondary);font-size:0.55rem;">INACTIVA</span>' : '') + '</span>' +
                 (isFinalizado ? '<span class="badge badge-success" style="font-size:0.6rem;">✓ FINALIZADO</span>' : '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);font-size:0.6rem;">PENDIENTE</span>') +
                 '</div>';
 
@@ -6032,14 +6272,14 @@ function renderFinalDetail() {
                 '<button class="btn btn-sm btn-outline" data-final-edit="' + partido.id + '" title="Editar score"><span class="material-symbols-outlined" style="font-size:0.8rem;">sports_score</span></button>' +
                 '<button class="btn btn-sm btn-danger" data-del-final-partido="' + partido.id + '" title="Eliminar"><span class="material-symbols-outlined" style="font-size:0.8rem;">delete</span></button>' +
                 '</div></div></div>';
-        } else {
+        } else if (!isInactive) {
             html += '<div class="card" style="margin-bottom:0.5rem;border-left:4px solid var(--on-surface-variant-40);">' +
                 '<div style="display:flex;justify-content:space-between;align-items:center;">' +
                 '<div>' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat)) + '</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.82rem;color:var(--on-surface-variant-40);">' + num + ' ' + esc(formatCategoria(cat.nombre)) + '</div>' +
                 '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">No configurado</div>' +
                 '</div>' +
-                '<button class="btn btn-sm btn-primary" data-add-final-partido="' + esc(cat) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
+                '<button class="btn btn-sm btn-primary" data-add-final-partido="' + esc(cat.nombre) + '" title="Crear partido"><span class="material-symbols-outlined" style="font-size:0.8rem;">add</span></button>' +
                 '</div></div>';
         }
     });
@@ -6099,7 +6339,7 @@ function renderFinalDetail() {
             const v1 = j1Sel.value;
             const players = getPlayersInTeam(fin.equipo_a_id);
             j2Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                players.filter(p => p.id !== v1).map(p => '<option value="' + p.id + '"' + (p.id === j2Sel.value ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+                players.filter(p => p.id !== v1).map(p => '<option value="' + p.id + '"' + (p.id === j2Sel.value ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
         };
         j1Sel.addEventListener('change', updatePair);
     }
@@ -6108,7 +6348,7 @@ function renderFinalDetail() {
             const v3 = j3Sel.value;
             const players = getPlayersInTeam(fin.equipo_b_id);
             j4Sel.innerHTML = '<option value="">— Seleccionar —</option>' +
-                players.filter(p => p.id !== v3).map(p => '<option value="' + p.id + '"' + (p.id === j4Sel.value ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+                players.filter(p => p.id !== v3).map(p => '<option value="' + p.id + '"' + (p.id === j4Sel.value ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
         };
         j3Sel.addEventListener('change', updatePair);
     }
@@ -6122,7 +6362,7 @@ function renderFinalPartidoForm(fin, existingPart) {
     const bColor = fin.equipo_b_color || getTeamColor(fin.equipo_b_id) || '#888';
     const aPlayers = getPlayersInTeam(fin.equipo_a_id);
     const bPlayers = getPlayersInTeam(fin.equipo_b_id);
-    const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(shortName(p)) + '</option>').join('');
+    const makeOpts = (players, sel, excl) => '<option value="">— Seleccionar —</option>' + players.filter(p => p.id !== excl).map(p => '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + shortName(p) + '</option>').join('');
 
     const j1 = existingPart?.jugador_a_1_id || '';
     const j2 = existingPart?.jugador_a_2_id || '';

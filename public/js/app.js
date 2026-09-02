@@ -1,4 +1,4 @@
-import { getDocs, collection, query, where, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+import { getDocs, getDoc, doc, collection, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { db } from './firebase.js';
 import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
@@ -126,110 +126,301 @@ function getPublicRs(p) {
     };
 }
 
+// ═══════════════════════════════════════════
+// CAPA DE DATOS: dataset canónico + carga perezosa por pestaña
+// Firestore → memoria (compartida) → vistas. Nunca al revés.
+// ═══════════════════════════════════════════
+const _jornadaPartidos = {};
+const _loaded = { base: false, jugadores: false, partidos: false, semis: false, fins: false };
+const _pending = {};
 let _dataLoaded = false;
-let _resUnsubscribers = [];
-let _semiUnsubscribers = [];
-let _finalUnsubscribers = [];
+let _currentTab = null;
+let _gen = 0;
 
-function unsubscribeResultadosLive() {
-    _resUnsubscribers.forEach(u => { try { u(); } catch (e) {} });
-    _resUnsubscribers = [];
+if (typeof window !== 'undefined') {
+    window._dbg = {
+        jugadores: () => allJugadores,
+        equipos: () => allEquipos,
+        jornadas: () => allJornadas,
+        loadAllData: reloadAllData,
+        reloadEquipos: () => renderEquipos(),
+        get tournamentId() { return getActiveTournamentId(); },
+        get dataLoaded() { return _dataLoaded; }
+    };
 }
 
-// Live listeners sobre jornadas/{id}/partidos (los que carga el admin en Resultados)
-function setupResultadosLive() {
-    unsubscribeResultadosLive();
-    for (const jornada of allJornadas) {
-        const col = collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos');
-        const unsub = onSnapshot(col, (snap) => {
-            // Reconstruir los partidos de esta jornada en allPartidosEliminatoria
-            allPartidosEliminatoria = allPartidosEliminatoria.filter(p => p._jornadaId !== jornada.id);
-            snap.docs.forEach(d => {
-                const p = { id: d.id, ...normalizeFields(d.data()) };
-                p._jornadaId = jornada.id;
-                p._jornadaNumero = jornada.numero;
-                p._jornadaFecha = jornada.fecha;
-                allPartidosEliminatoria.push(p);
-            });
-            // Si el tab Resultados está activo, re-renderizar en vivo
-            const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
-            if (activeTab === 'resultados') renderResultados();
-        }, (err) => {
-            console.error('Error en listener de resultados:', err);
+function _ensure(key, loader) {
+    if (_loaded[key]) return Promise.resolve(true);
+    if (_pending[key]) return _pending[key];
+    const p = Promise.resolve().then(loader).then((ok) => { if (ok) _loaded[key] = true; return ok; });
+    _pending[key] = p;
+    p.finally(() => { if (_pending[key] === p) _pending[key] = null; });
+    return p;
+}
+
+function _annotatePartido(p, j) {
+    p._jornadaId = j.id;
+    p._jornadaNumero = j.numero;
+    p._jornadaFecha = j.fecha;
+    return p;
+}
+
+// Deriva allEnfrentamientos y allPartidosEliminatoria desde el dataset canónico
+function _rebuildRoundRobinDerived() {
+    allEnfrentamientos = [];
+    allPartidosEliminatoria = [];
+    allJornadas.forEach(j => {
+        const partidos = _jornadaPartidos[j.id] || [];
+        for (const p of partidos) allPartidosEliminatoria.push(p);
+        allEnfrentamientos.push({
+            id: j.id,
+            equipo_a_id: j.equipo_a_id,
+            equipo_b_id: j.equipo_b_id,
+            _jornadaId: j.id,
+            _jornadaNumero: j.numero,
+            cerrada: j.cerrada === true,
+            partidos
         });
-        _resUnsubscribers.push(unsub);
-    }
+    });
 }
 
-async function loadAllData() {
-    if (typeof window !== "undefined") { window._dbg = { jugadores: ()=>allJugadores, equipos: ()=>allEquipos, jornadas: ()=>allJornadas, loadAllData, reloadEquipos: ()=>renderEquipos(), get tournamentId(){return getActiveTournamentId();}, get dataLoaded(){return _dataLoaded;} }; }
-    if (_dataLoaded) return;
-    await loadTournamentConfig();
-    if (!getActiveTournamentId()) return;
-    try {
-        const [jugSnap, equipSnap, jornSnap] = await Promise.all([
-            getDocs(col('jugadores')),
+async function ensureBase() {
+    return _ensure('base', async () => {
+        const g = _gen;
+        await loadTournamentConfig();
+        if (!getActiveTournamentId() || g !== _gen) return false;
+        const [eq, jo] = await Promise.all([
             getDocs(col('equipos')),
             getDocs(col('jornadas'))
         ]);
-        console.log('[public] jugadores docs:', jugSnap.docs.length, 'equipos docs:', equipSnap.docs.length, 'jornadas docs:', jornSnap.docs.length);
-        allJugadores = jugSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-        allEquipos = equipSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-        allJornadas = jornSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        if (g !== _gen) return false;
+        allEquipos = eq.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        allJornadas = jo.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        _dataLoaded = true;
+        window.dispatchEvent(new CustomEvent('appDataLoaded'));
+        return true;
+    });
+}
 
-        // Exponer para debug
-        if (typeof window !== 'undefined') {
-            window._dbg = {
-                jugadores: () => allJugadores,
-                equipos: () => allEquipos,
-                jornadas: () => allJornadas,
-                loadAllData,
-                reloadEquipos: () => renderEquipos(),
-                get tournamentId() { return getActiveTournamentId(); },
-                get dataLoaded() { return _dataLoaded; }
-            };
-        }
+async function ensureJugadores() {
+    return _ensure('jugadores', async () => {
+        const g = _gen;
+        await ensureBase();
+        if (g !== _gen) return false;
+        if (!getActiveTournamentId()) return true;
+        const snap = await getDocs(col('jugadores'));
+        if (g !== _gen) return false;
+        allJugadores = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+        return true;
+    });
+}
 
-        // Load partidos by category (the ones the admin writes/scores) and build
-        // enfrentamientos por jornada (misma fuente que el admin para posiciones)
-        allEnfrentamientos = [];
-        allPartidosEliminatoria = [];
-        const enfrentamientosResults = await Promise.all(allJornadas.map(async jornada => {
-            const directSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornada.id, 'partidos'));
-            const directPartidos = [];
-            directSnap.docs.forEach(d => {
-                const p = { id: d.id, ...normalizeFields(d.data()) };
-                p._jornadaId = jornada.id;
-                p._jornadaNumero = jornada.numero;
-                p._jornadaFecha = jornada.fecha;
-                directPartidos.push(p);
-            });
-            return {
-                jornada,
-                partidos: directPartidos
-            };
+async function ensurePartidos() {
+    return _ensure('partidos', async () => {
+        const g = _gen;
+        await ensureBase();
+        if (g !== _gen) return false;
+        const tid = getActiveTournamentId();
+        if (!tid) return true;
+        const results = await Promise.all(allJornadas.map(async j => {
+            const snap = await getDocs(collection(db, 'torneos', tid, 'jornadas', j.id, 'partidos'));
+            return { id: j.id, partidos: snap.docs.map(d => _annotatePartido({ id: d.id, ...normalizeFields(d.data()) }, j)) };
         }));
+        if (g !== _gen) return false;
+        results.forEach(r => { _jornadaPartidos[r.id] = r.partidos; });
+        _rebuildRoundRobinDerived();
+        return true;
+    });
+}
 
-        enfrentamientosResults.forEach(({ jornada, partidos }) => {
-            allPartidosEliminatoria.push(...partidos);
-            allEnfrentamientos.push({
-                id: jornada.id,
-                equipo_a_id: jornada.equipo_a_id,
-                equipo_b_id: jornada.equipo_b_id,
-                _jornadaId: jornada.id,
-                _jornadaNumero: jornada.numero,
-                cerrada: jornada.cerrada === true,
-                partidos
-            });
+async function ensureSemis() {
+    return _ensure('semis', async () => {
+        const g = _gen;
+        await ensureBase();
+        if (g !== _gen) return false;
+        const tid = getActiveTournamentId();
+        if (!tid) return true;
+        const snap = await getDocs(collection(db, 'torneos', tid, 'semifinales'));
+        const semis = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()), partidos: [] }));
+        const partSnaps = await Promise.all(semis.map(s =>
+            getDocs(collection(db, 'torneos', tid, 'semifinales', s.id, 'partidos'))
+        ));
+        if (g !== _gen) return false;
+        semis.forEach((s, i) => {
+            s.partidos = partSnaps[i].docs.map(p => ({ id: p.id, ...normalizeFields(p.data()) }));
         });
-    } catch (e) {
-        console.error('Error loading data:', e);
-    }
-    setupResultadosLive();
-    setupSemifinalesLive();
-    setupFinalesLive();
-    _dataLoaded = true;
-    window.dispatchEvent(new CustomEvent('appDataLoaded'));
+        allSemifinales = semis;
+        return true;
+    });
+}
+
+async function ensureFins() {
+    return _ensure('fins', async () => {
+        const g = _gen;
+        await ensureBase();
+        if (g !== _gen) return false;
+        const tid = getActiveTournamentId();
+        if (!tid) return true;
+        const snap = await getDocs(collection(db, 'torneos', tid, 'finales'));
+        const fins = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()), partidos: [] }));
+        const partSnaps = await Promise.all(fins.map(f =>
+            getDocs(collection(db, 'torneos', tid, 'finales', f.id, 'partidos'))
+        ));
+        if (g !== _gen) return false;
+        fins.forEach((f, i) => {
+            f.partidos = partSnaps[i].docs.map(p => ({ id: p.id, ...normalizeFields(p.data()) }));
+        });
+        allFinales = fins;
+        return true;
+    });
+}
+
+// ── Listeners realtime: solo para el módulo visible ──
+const _live = { rr: [], semis: [], fins: [] };
+
+function _detachLive(kind) {
+    _live[kind].forEach(u => { try { u(); } catch (e) {} });
+    _live[kind] = [];
+}
+
+function _detachAllLive() {
+    ['rr', 'semis', 'fins'].forEach(_detachLive);
+}
+
+function _attachRRLive() {
+    if (_live.rr.length) return;
+    const tid = getActiveTournamentId();
+    if (!tid) return;
+    allJornadas.forEach(j => {
+        const unsub = onSnapshot(collection(db, 'torneos', tid, 'jornadas', j.id, 'partidos'), (snap) => {
+            _jornadaPartidos[j.id] = snap.docs.map(d => _annotatePartido({ id: d.id, ...normalizeFields(d.data()) }, j));
+            _rebuildRoundRobinDerived();
+            schedulePublicRender();
+        }, (err) => {
+            console.error('Error en listener de resultados:', err);
+        });
+        _live.rr.push(unsub);
+    });
+}
+
+function _attachSemisLive() {
+    if (_live.semis.length) return;
+    const tid = getActiveTournamentId();
+    if (!tid) return;
+    const subscribedIds = new Set();
+    const unsub = onSnapshot(collection(db, 'torneos', tid, 'semifinales'), (snap) => {
+        snap.docs.forEach(docSnap => {
+            const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
+            const existing = allSemifinales.find(s => s.id === docSnap.id);
+            if (existing) {
+                Object.assign(existing, data);
+            } else {
+                allSemifinales.push({ ...data, partidos: [] });
+            }
+            if (!subscribedIds.has(docSnap.id)) {
+                subscribedIds.add(docSnap.id);
+                const pUnsub = onSnapshot(
+                    collection(db, 'torneos', tid, 'semifinales', docSnap.id, 'partidos'),
+                    (pSnap) => {
+                        const s = allSemifinales.find(x => x.id === docSnap.id);
+                        if (s) s.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+                        schedulePublicRender();
+                    },
+                    (err) => console.error('Error en listener partidos semifinal:', err)
+                );
+                _live.semis.push(pUnsub);
+            }
+        });
+        schedulePublicRender();
+    }, (err) => console.error('Error en listener semifinales:', err));
+    _live.semis.push(unsub);
+}
+
+function _attachFinsLive() {
+    if (_live.fins.length) return;
+    const tid = getActiveTournamentId();
+    if (!tid) return;
+    const subscribedIds = new Set();
+    const unsub = onSnapshot(collection(db, 'torneos', tid, 'finales'), (snap) => {
+        snap.docs.forEach(docSnap => {
+            const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
+            const existing = allFinales.find(f => f.id === docSnap.id);
+            if (existing) {
+                Object.assign(existing, data);
+            } else {
+                allFinales.push({ ...data, partidos: [] });
+            }
+            if (!subscribedIds.has(docSnap.id)) {
+                subscribedIds.add(docSnap.id);
+                const pUnsub = onSnapshot(
+                    collection(db, 'torneos', tid, 'finales', docSnap.id, 'partidos'),
+                    (pSnap) => {
+                        const f = allFinales.find(x => x.id === docSnap.id);
+                        if (f) f.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
+                        schedulePublicRender();
+                    },
+                    (err) => console.error('Error en listener partidos final:', err)
+                );
+                _live.fins.push(pUnsub);
+            }
+        });
+        schedulePublicRender();
+    }, (err) => console.error('Error en listener finales:', err));
+    _live.fins.push(unsub);
+}
+
+function _syncLive(tabId) {
+    const want = new Set();
+    if (tabId === 'posiciones' || tabId === 'resultados' || tabId === 'equipos') want.add('rr');
+    if (tabId === 'semifinales' || tabId === 'final' || tabId === 'equipos') want.add('semis');
+    if (tabId === 'final' || tabId === 'equipos') want.add('fins');
+    ['rr', 'semis', 'fins'].forEach(k => { if (!want.has(k)) _detachLive(k); });
+    if (want.has('rr')) _attachRRLive();
+    if (want.has('semis')) _attachSemisLive();
+    if (want.has('fins')) _attachFinsLive();
+}
+
+// ── Render coalescido: los snapshots agrupan actualizaciones en un frame ──
+let _renderQueued = false;
+function schedulePublicRender() {
+    if (_renderQueued) return;
+    _renderQueued = true;
+    requestAnimationFrame(() => {
+        _renderQueued = false;
+        const t = _currentTab;
+        try {
+            if (t === 'posiciones' && _loaded.partidos) renderPosiciones();
+            else if (t === 'resultados' && _loaded.partidos && _loaded.jugadores) renderResultados();
+            else if (t === 'semifinales' && _loaded.semis) renderSemifinalesPublic();
+            else if (t === 'final' && _loaded.fins) renderFinalPublic();
+            else if (t === 'equipos' && _loaded.partidos && _loaded.jugadores && _loaded.semis && _loaded.fins) renderEquipos();
+        } catch (e) {
+            console.error('Error en render programado:', e);
+        }
+    });
+}
+
+function _resetAllData() {
+    _detachAllLive();
+    _gen++;
+    allJugadores = [];
+    allEquipos = [];
+    allJornadas = [];
+    allEnfrentamientos = [];
+    allPartidosEliminatoria = [];
+    allSemifinales = [];
+    allFinales = [];
+    Object.keys(_jornadaPartidos).forEach(k => delete _jornadaPartidos[k]);
+    Object.keys(_loaded).forEach(k => { _loaded[k] = false; });
+    Object.keys(_pending).forEach(k => { delete _pending[k]; });
+    _dataLoaded = false;
+    _currentTab = null;
+}
+
+async function reloadAllData() {
+    const tab = _currentTab || 'posiciones';
+    _resetAllData();
+    await _renderTab(tab);
 }
 
 
@@ -464,10 +655,13 @@ function renderResultados() {
     const resultSearch = document.getElementById('result-search-public');
     if (resultSearch) {
         resultSearch.addEventListener('input', () => {
-            const term = resultSearch.value.toLowerCase();
-            document.querySelectorAll('.res-public-card').forEach(card => {
-                card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
-            });
+            clearTimeout(resultSearch._debounce);
+            resultSearch._debounce = setTimeout(() => {
+                const term = resultSearch.value.toLowerCase();
+                document.querySelectorAll('.res-public-card').forEach(card => {
+                    card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
+                });
+            }, 150);
         });
     }
 }
@@ -480,38 +674,35 @@ function renderInicio() {
         el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">info</span><p>No hay torneo activo configurado</p></div>';
         return;
     }
-    const t = getActiveTournament();
-    const bracketConfig = getBracketConfig();
     el.innerHTML = `
-        <div class="card" style="border-top:4px solid var(--primary);">
-            <div style="font-family:Lexend;font-weight:600;font-size:1.1rem;color:var(--primary);margin-bottom:0.75rem;">
-                <span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle;">home</span> Información del Torneo
+        <div class="card info-card">
+            <div class="info-title">
+                <span class="material-symbols-outlined">home</span> Información del Torneo
             </div>
-            <div style="display:grid;gap:0.75rem;">
-                <div class="card" style="padding:1rem;">
-                    <div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">NOMBRE</div>
-                    <div style="font-family:Lexend;font-weight:600;font-size:1rem;">${esc(t.name || 'Torneo de Colores')}</div>
+            <div class="info-hero">
+                <div class="info-ball">&#127934;</div>
+                <h2 class="info-name">Torneo de Colores</h2>
+                <p class="info-desc">Encuentro deportivo para compartir, competir y disfrutar del tenis.</p>
+            </div>
+            <div class="info-divider"></div>
+            <div class="info-section">
+                <span class="material-symbols-outlined info-section-icon">groups</span>
+                <div class="info-section-content">
+                    <div class="info-section-title">Colaboradores</div>
+                    <div class="info-section-label">Socios</div>
+                    <div class="info-section-body">Andrés &middot; Jonathan &middot; Luis &middot; Sergio &middot; Daniel</div>
                 </div>
-                <div class="card" style="padding:1rem;">
-                    <div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">FECHA</div>
-                    <div style="font-family:Lexend;font-weight:600;font-size:1rem;">${esc(t.fecha || 'Por definir')}</div>
+            </div>
+            <div class="info-divider"></div>
+            <div class="info-section">
+                <span class="info-section-icon">&#128187;</span>
+                <div class="info-section-content">
+                    <div class="info-section-title">Desarrollado por</div>
+                    <div class="info-section-body">JDM Group Tech.</div>
                 </div>
-                <div class="card" style="padding:1rem;">
-                    <div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">UBICACIÓN</div>
-                    <div style="font-family:Lexend;font-weight:600;font-size:1rem;">${esc(t.ubicacion || 'Por definir')}</div>
-                </div>
-                <div class="card" style="padding:1rem;">
-                    <div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">ESTADO</div>
-                    <div style="font-family:Lexend;font-weight:600;font-size:1rem;">
-                        <span class="badge badge-${t.status === 'active' ? 'success' : 'outline'}">${t.status === 'active' ? 'En curso' : t.status === 'closed' ? 'Finalizado' : 'Pendiente'}</span>
-                    </div>
-                </div>
-                <div class="card" style="padding:1rem;">
-                    <div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.2rem;">FORMATO</div>
-                    <div style="font-family:Lexend;font-weight:600;font-size:1rem;">
-                        Round Robin → ${bracketConfig.clasificados} clasificados → Semifinales → Final
-                    </div>
-                </div>
+            </div>
+            <div class="info-footer">
+                <span class="info-footer-icon">&#128154;</span> Hecho con pasión por el tenis
             </div>
         </div>
         <div class="card" style="border-top:4px solid var(--secondary);margin-top:1rem;">
@@ -651,7 +842,7 @@ function renderEquipos() {
         const jugadoresHtml = jugadoresEq.length
             ? jugadoresEq.map(j => {
                 const jOpen = _openJugadorId === j.id;
-                const partidosHtml = _renderJugadorPartidos(j.id, eq.id);
+                const body = jOpen ? _renderJugadorPartidos(j.id, eq.id) : '';
                 return '<div class="jugador-card' + (jOpen ? ' open' : '') + '" data-jug-id="' + j.id + '">' +
                     '<div class="jugador-header">' +
                         '<span class="jugador-name">' + esc(shortName(j)) + '</span>' +
@@ -660,7 +851,7 @@ function renderEquipos() {
                     '<div class="jugador-meta">' +
                         (j.categoria ? '<span class="badge" style="background:var(--primary-12);color:var(--primary);font-size:0.6rem;">' + esc(j.categoria) + '</span>' : '') +
                     '</div>' +
-                    '<div class="jugador-body">' + partidosHtml + '</div>' +
+                    '<div class="jugador-body" data-eq-id="' + eq.id + '"' + (jOpen ? ' data-filled="1"' : '') + '>' + body + '</div>' +
                 '</div>';
             }).join('')
             : '<div class="sin-partidos">Sin jugadores asignados</div>';
@@ -678,49 +869,108 @@ function renderEquipos() {
     html += '</div>';
     el.innerHTML = html || '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>No hay equipos activos</p></div>';
 
-    el.querySelectorAll('.card-equipos').forEach(card => {
-        card.addEventListener('click', (e) => {
-            if (e.target.closest('.jugador-card')) return;
+    // Toggles incrementales: no re-renderizar toda la lista al expandir
+    el.querySelectorAll('.card-equipos > .equipo-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const card = header.parentElement;
             const id = card.dataset.eqId;
-            _openEquipoId = (_openEquipoId === id) ? null : id;
+            const opening = !card.classList.contains('open');
+            el.querySelectorAll('.card-equipos.open').forEach(c => {
+                if (c !== card) {
+                    c.classList.remove('open');
+                    c.querySelectorAll('.jugador-card.open').forEach(jc => jc.classList.remove('open'));
+                }
+            });
+            card.querySelectorAll('.jugador-card.open').forEach(jc => jc.classList.remove('open'));
             _openJugadorId = null;
-            renderEquipos();
+            if (opening) {
+                card.classList.add('open');
+                _openEquipoId = id;
+            } else {
+                card.classList.remove('open');
+                _openEquipoId = null;
+            }
         });
     });
 
-    el.querySelectorAll('.jugador-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-            const id = card.dataset.jugId;
-            _openJugadorId = (_openJugadorId === id) ? null : id;
-            renderEquipos();
+    el.querySelectorAll('.card-equipos .jugador-card > .jugador-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const card = header.parentElement;
+            const jugId = card.dataset.jugId;
+            const body = card.querySelector('.jugador-body');
+            const equipoId = body ? body.dataset.eqId : null;
+            const opening = !card.classList.contains('open');
+            const list = card.closest('.equipos-list');
+            if (list) list.querySelectorAll('.jugador-card.open').forEach(c => { if (c !== card) c.classList.remove('open'); });
+            if (opening) {
+                card.classList.add('open');
+                _openJugadorId = jugId;
+                if (body && body.dataset.filled !== '1') {
+                    body.innerHTML = _renderJugadorPartidos(jugId, equipoId);
+                    body.dataset.filled = '1';
+                }
+            } else {
+                card.classList.remove('open');
+                _openJugadorId = null;
+            }
         });
     });
 }
 
-// ── Tab Switching ──
-function _renderTab(tabId) {
+// ── Tab Switching (lazy: cada pestaña asegura solo sus datos) ──
+async function _renderTab(tabId) {
+    if (_currentTab === tabId) return;
+    _currentTab = tabId;
+    const g = _gen;
     document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     const tabBtn = document.querySelector('[data-tab="' + tabId + '"]');
     if (tabBtn) tabBtn.classList.add('active');
     const content = document.getElementById(tabId);
     if (content) content.classList.add('active');
-    switch (tabId) {
-        case 'inicio': renderInicio(); break;
-        case 'equipos':
-            if (_dataLoaded) {
-                renderEquipos();
-            } else {
-                const el = document.getElementById('equipos');
-                if (el) el.innerHTML = loadingHTML;
-                window.addEventListener('appDataLoaded', () => renderEquipos(), { once: true });
-            }
-            break;
-        case 'posiciones': renderPosiciones(); break;
-        case 'resultados': renderResultados(); break;
-        case 'semifinales': renderSemifinalesPublic(); break;
-        case 'final': renderFinalPublic(); break;
+
+    if (tabId === 'inicio') {
+        try { await ensureBase(); } catch (e) { console.error('Error cargando config:', e); }
+        if (_currentTab !== tabId || g !== _gen) return;
+        _syncLive(tabId);
+        renderInicio();
+        return;
     }
+
+    let ready;
+    if (tabId === 'posiciones') ready = ensurePartidos();
+    else if (tabId === 'resultados') ready = Promise.all([ensureJugadores(), ensurePartidos()]);
+    else if (tabId === 'semifinales') ready = ensureSemis();
+    else if (tabId === 'final') ready = Promise.all([ensureSemis(), ensureFins()]);
+    else if (tabId === 'equipos') ready = Promise.all([ensureJugadores(), ensurePartidos(), ensureSemis(), ensureFins()]);
+    else ready = Promise.resolve();
+
+    const dataReady =
+        tabId === 'posiciones' ? _loaded.partidos :
+        tabId === 'resultados' ? (_loaded.partidos && _loaded.jugadores) :
+        tabId === 'semifinales' ? _loaded.semis :
+        tabId === 'final' ? (_loaded.fins && _loaded.semis) :
+        tabId === 'equipos' ? (_loaded.jugadores && _loaded.partidos && _loaded.semis && _loaded.fins) : true;
+    if (!dataReady && content) content.innerHTML = loadingHTML;
+
+    try {
+        await ready;
+    } catch (e) {
+        console.error('Error loading tab data:', e);
+        if (_currentTab === tabId && g === _gen && content) {
+            content.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined" style="color:var(--error);">error</span><p>Error al cargar datos. Verifica la conexión.</p></div>';
+        }
+        return;
+    }
+    if (_currentTab !== tabId || g !== _gen) return;
+
+    if (tabId === 'posiciones') renderPosiciones();
+    else if (tabId === 'resultados') renderResultados();
+    else if (tabId === 'semifinales') renderSemifinalesPublic();
+    else if (tabId === 'final') renderFinalPublic();
+    else if (tabId === 'equipos') renderEquipos();
+    _syncLive(tabId);
 }
 
 window.showTab = function(tabId) {
@@ -733,30 +983,20 @@ window.addEventListener('popstate', () => {
     _renderTab(tab);
 });
 
-// ── Tab Scroll Indicator ──
-function setupTabScroll() {
-    document.querySelectorAll('.tab-nav-wrap').forEach(wrap => {
-        const nav = wrap.querySelector('.tab-nav');
-        const btn = wrap.querySelector('.tab-scroll-btn');
-        if (!nav || !btn) return;
-        const update = () => {
-            const overflow = nav.scrollWidth > nav.clientWidth + nav.scrollLeft + 4;
-            btn.classList.toggle('hidden', !overflow);
-        };
-        btn.addEventListener('click', () => nav.scrollBy({ left: 150, behavior: 'smooth' }));
-        nav.addEventListener('scroll', update);
-        window.addEventListener('resize', update);
-        update();
-    });
-}
-
 // ── Public Tournament Selector ──
 let _tournamentList = [];
 
 async function loadTournamentList() {
+    const ids = getActiveTournamentIds();
+    if (!ids.length) { _tournamentList = []; return; }
+    if (ids.length <= 1) {
+        const t = getActiveTournament();
+        _tournamentList = ids.map(id => ({ id, name: (t && t.id === id) ? (t.name || t.nombre || id) : id }));
+        return;
+    }
     try {
-        const snap = await getDocs(collection(db, 'torneos'));
-        _tournamentList = snap.docs.map(d => ({ id: d.id, name: d.data().name }));
+        const snaps = await Promise.all(ids.map(id => getDoc(doc(db, 'torneos', id))));
+        _tournamentList = snaps.filter(s => s.exists()).map(s => ({ id: s.id, name: s.data().name || s.data().nombre }));
     } catch (e) {
         _tournamentList = [];
     }
@@ -784,10 +1024,10 @@ function initPublicTournamentSelector() {
         if (newId === getActiveTournamentId()) return;
         try {
             await setSelectedTournament(newId);
-            _dataLoaded = false;
-            await loadAllData();
-            _renderTab(document.querySelector('.tab-nav button.active')?.dataset.tab || 'posiciones');
+            const prevTab = _currentTab;
+            _resetAllData();
             updatePublicTournamentSelector();
+            await _renderTab(prevTab || 'posiciones');
         } catch (e) {
             console.error('Error switching tournament:', e);
         }
@@ -804,108 +1044,15 @@ async function init() {
         }
         history.replaceState({ tab: initialTab }, '', '#' + initialTab);
         _renderTab(initialTab);
-
-        document.getElementById('posiciones').innerHTML = loadingHTML;
-        await loadAllData();
-        await loadTournamentList();
+        await ensureBase();
+        if (getActiveTournamentIds().length > 1) await loadTournamentList();
         initPublicTournamentSelector();
         updatePublicTournamentSelector();
-        _renderTab(initialTab);
-        setupTabScroll();
     } catch (e) {
         console.error('Error loading initial data:', e);
-        document.getElementById('posiciones').innerHTML = '<div class="empty-state"><span class="material-symbols-outlined" style="color:var(--error);">error</span><p>Error al cargar datos. Verifica la conexión.</p></div>';
+        const el = document.getElementById(_currentTab || 'posiciones');
+        if (el) el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined" style="color:var(--error);">error</span><p>Error al cargar datos. Verifica la conexión.</p></div>';
     }
-}
-
-function unsubscribeSemifinalesLive() {
-    _semiUnsubscribers.forEach(u => { try { u(); } catch (e) {} });
-    _semiUnsubscribers = [];
-    allSemifinales = [];
-}
-
-function setupSemifinalesLive() {
-    unsubscribeSemifinalesLive();
-    const tid = getActiveTournamentId();
-    if (!tid) return;
-
-    const subscribedIds = new Set();
-
-    const semiUnsub = onSnapshot(collection(db, 'torneos', tid, 'semifinales'), (snap) => {
-        snap.docs.forEach(docSnap => {
-            const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
-            const existing = allSemifinales.find(s => s.id === docSnap.id);
-            if (existing) {
-                Object.assign(existing, data);
-            } else {
-                allSemifinales.push({ ...data, partidos: [] });
-            }
-            if (!subscribedIds.has(docSnap.id)) {
-                subscribedIds.add(docSnap.id);
-                const pUnsub = onSnapshot(
-                    collection(db, 'torneos', tid, 'semifinales', docSnap.id, 'partidos'),
-                    (pSnap) => {
-                        const s = allSemifinales.find(x => x.id === docSnap.id);
-                        if (s) s.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-                        const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
-                        if (activeTab === 'semifinales') renderSemifinalesPublic();
-                        if (activeTab === 'final') renderFinalPublic();
-                    },
-                    (err) => console.error('Error en listener partidos semifinal:', err)
-                );
-                _semiUnsubscribers.push(pUnsub);
-            }
-        });
-        const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
-        if (activeTab === 'semifinales') renderSemifinalesPublic();
-        if (activeTab === 'final') renderFinalPublic();
-    }, (err) => console.error('Error en listener semifinales:', err));
-
-    _semiUnsubscribers.push(semiUnsub);
-}
-
-function unsubscribeFinalesLive() {
-    _finalUnsubscribers.forEach(u => { try { u(); } catch (e) {} });
-    _finalUnsubscribers = [];
-    allFinales = [];
-}
-
-function setupFinalesLive() {
-    unsubscribeFinalesLive();
-    const tid = getActiveTournamentId();
-    if (!tid) return;
-
-    const subscribedIds = new Set();
-
-    const finalUnsub = onSnapshot(collection(db, 'torneos', tid, 'finales'), (snap) => {
-        snap.docs.forEach(docSnap => {
-            const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
-            const existing = allFinales.find(f => f.id === docSnap.id);
-            if (existing) {
-                Object.assign(existing, data);
-            } else {
-                allFinales.push({ ...data, partidos: [] });
-            }
-            if (!subscribedIds.has(docSnap.id)) {
-                subscribedIds.add(docSnap.id);
-                const pUnsub = onSnapshot(
-                    collection(db, 'torneos', tid, 'finales', docSnap.id, 'partidos'),
-                    (pSnap) => {
-                        const f = allFinales.find(x => x.id === docSnap.id);
-                        if (f) f.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
-                        const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
-                        if (activeTab === 'final') renderFinalPublic();
-                    },
-                    (err) => console.error('Error en listener partidos final:', err)
-                );
-                _finalUnsubscribers.push(pUnsub);
-            }
-        });
-        const activeTab = document.querySelector('.tab-nav button.active')?.dataset.tab;
-        if (activeTab === 'final') renderFinalPublic();
-    }, (err) => console.error('Error en listener finales:', err));
-
-    _finalUnsubscribers.push(finalUnsub);
 }
 
 function renderSemifinalesPublic() {
@@ -955,7 +1102,7 @@ function renderSemifinalesPublic() {
             '<span style="font-size:0.75rem;font-family:Lexend;font-weight:600;">' + aWins + ' - ' + bWins + '</span>' +
             (ganadorNombre
                 ? '<span class="badge badge-success"><span class="material-symbols-outlined" style="font-size:0.6rem;">emoji_events</span> ' + esc(ganadorNombre) + '</span>'
-                : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/7 partidos</span>') +
+                : '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + semi.partidos.filter(p => p.estado === 'finalizado').length + '/' + (semi.partidos_esperados || 7) + ' partidos</span>') +
             '</div>' +
             '</div>';
 
@@ -1029,7 +1176,7 @@ function renderFinalPublic() {
                 : '') +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.4rem;">' +
             '<span style="font-size:0.75rem;font-family:Lexend;font-weight:600;">' + aWins + ' - ' + bWins + '</span>' +
-            '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/7 partidos</span>' +
+            '<span style="font-size:0.68rem;color:var(--on-surface-variant-40);">' + fin.partidos.filter(p => p.estado === 'finalizado').length + '/' + (fin.partidos_esperados || 7) + ' partidos</span>' +
             '</div>' +
             '</div>';
 
@@ -1045,6 +1192,93 @@ function renderFinalPublic() {
 
     el.innerHTML = html;
 }
+
+// ── Tab Dropdown Logic ──
+function setupTabDropdown() {
+    const moreBtn = document.getElementById('tab-more-btn');
+    const dropdown = document.getElementById('tab-dropdown');
+    if (!moreBtn || !dropdown) return;
+
+    const wrap = moreBtn.closest('.tab-nav-wrap');
+    let isOpen = false;
+    let backdrop = null;
+
+    function positionDropdown() {
+        const wrapRect = wrap.getBoundingClientRect();
+        const btnRect = moreBtn.getBoundingClientRect();
+        const ddWidth = dropdown.offsetWidth || 160;
+
+        dropdown.classList.remove('align-left', 'align-right');
+        const rightOffset = wrapRect.right - btnRect.right;
+        const ddLeft = btnRect.right - ddWidth;
+
+        if (ddLeft >= wrapRect.left) {
+            dropdown.style.right = rightOffset + 'px';
+            dropdown.style.left = 'auto';
+            dropdown.classList.add('align-right');
+        } else {
+            dropdown.style.left = '0';
+            dropdown.style.right = 'auto';
+            dropdown.classList.add('align-left');
+        }
+    }
+
+    function createBackdrop() {
+        if (backdrop) return;
+        backdrop = document.createElement('div');
+        backdrop.style.cssText = 'position:fixed;inset:0;z-index:99;background:transparent;';
+        backdrop.addEventListener('click', closeDropdown);
+        backdrop.addEventListener('touchend', (e) => { e.preventDefault(); closeDropdown(); });
+        document.body.appendChild(backdrop);
+    }
+
+    function removeBackdrop() {
+        if (backdrop) { backdrop.remove(); backdrop = null; }
+    }
+
+    function closeDropdown() {
+        if (!isOpen) return;
+        isOpen = false;
+        moreBtn.classList.remove('open');
+        dropdown.classList.remove('show');
+        removeBackdrop();
+    }
+
+    moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isOpen) {
+            closeDropdown();
+        } else {
+            isOpen = true;
+            moreBtn.classList.add('open');
+            positionDropdown();
+            dropdown.classList.add('show');
+            createBackdrop();
+        }
+    });
+
+    // Actualizar estado active en dropdown
+    document.addEventListener('click', (e) => {
+        const tabBtn = e.target.closest('[data-tab]');
+        if (tabBtn) {
+            setTimeout(() => {
+                const tabId = tabBtn.dataset.tab;
+                dropdown.querySelectorAll('button').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.tab === tabId);
+                });
+                document.querySelectorAll('.tab-nav > button[data-tab]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.tab === tabId);
+                });
+                closeDropdown();
+            }, 0);
+        }
+    });
+}
+
+// Inicializar dropdown cuando el DOM esté listo
+document.addEventListener('DOMContentLoaded', () => {
+    setupTabDropdown();
+});
 
 init();
 

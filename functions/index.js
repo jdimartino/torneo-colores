@@ -1,4 +1,4 @@
-const functions = require('firebase-functions');
+const functions = require('firebase-functions/v1');
 const admin = require('firebase-admin');
 admin.initializeApp();
 
@@ -120,6 +120,7 @@ exports.updateUser = functions.https.onCall(async (data, context) => {
   }
 
   const callerUid = context.auth.uid;
+  const callerEmail = context.auth.token.email || '';
   const callerDoc = await db.collection('usuarios').doc(callerUid).get();
 
   if (!callerDoc.exists || callerDoc.data().rol !== ROLES.MASTER) {
@@ -193,6 +194,7 @@ exports.deleteUser = functions.https.onCall(async (data, context) => {
   }
 
   const callerUid = context.auth.uid;
+  const callerEmail = context.auth.token.email || '';
   const callerDoc = await db.collection('usuarios').doc(callerUid).get();
 
   if (!callerDoc.exists || callerDoc.data().rol !== ROLES.MASTER) {

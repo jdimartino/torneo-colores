@@ -1,23 +1,13 @@
-const CACHE_NAME = 'torneo-colores-v1';
+const CACHE_NAME = 'torneo-colores-v4';
 
 const PRECACHE_URLS = [
   '/',
   '/index.html',
   '/admin.html',
   '/manifest.json',
-  '/logo.png',
   '/css/styles.css',
-  '/js/app.js',
-  '/js/admin.js',
-  '/js/firebase.js',
-  '/js/config.js',
-  '/js/categorias.js',
-  '/js/matchStatus.js',
-  '/js/roundRobin.js',
-  '/js/standings.js',
-  '/js/tournament.js',
-  '/js/tournamentRefs.js',
-  '/js/utils.js'
+  '/favicon.png',
+  '/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {
