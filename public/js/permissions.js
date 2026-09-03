@@ -14,8 +14,8 @@ const MODULOS = {
   usuarios: {
     label: 'Usuarios',
     icon: 'manage_accounts',
-    read: [ROLES.MASTER],
-    write: [ROLES.MASTER]
+    read: [ROLES.MASTER, ROLES.FULL],
+    write: [ROLES.MASTER, ROLES.FULL]
   },
   jugadores: {
     label: 'Jugadores',
@@ -80,6 +80,12 @@ const MODULOS = {
   categorias: {
     label: 'Categorías',
     icon: 'sell',
+    read: [ROLES.MASTER, ROLES.FULL],
+    write: [ROLES.MASTER, ROLES.FULL]
+  },
+  correos: {
+    label: 'Correo Electrónico',
+    icon: 'email',
     read: [ROLES.MASTER, ROLES.FULL],
     write: [ROLES.MASTER, ROLES.FULL]
   }

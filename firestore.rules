@@ -158,6 +158,22 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isAdmin();
       }
+
+      // Historial de envíos de email: SOLO escribe el backend (Admin SDK
+      // no pasa por reglas). El panel lo lee vía Cloud Function emailGetHistory.
+      match /enviosEmail/{envioId} {
+        allow read: if false;
+        allow write: if false;
+      }
+    }
+
+    // ============================================
+    // CONTADORES DE EMAIL (backend únicamente)
+    // ============================================
+
+    match /emailStats/{docId} {
+      allow read: if false;
+      allow write: if false;
     }
   }
 }

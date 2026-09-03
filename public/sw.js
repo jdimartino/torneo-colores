@@ -1,4 +1,4 @@
-const CACHE_NAME = 'torneo-colores-v4';
+const CACHE_NAME = 'torneo-colores-v5';
 
 const PRECACHE_URLS = [
   '/',

@@ -5,8 +5,9 @@ import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, g
 import { renderTournamentPanel, getTournaments, getTournamentName, loadActiveTournamentNames } from './tournament.js?v=2';
 import { calculateStandings } from './standings.js';
 import { CATEGORIAS_JUGADOR, ensureCategorias, getDrawCategoriasActivas, getDrawCategoriasTodas, invalidateCategorias, crearCategoria, editarCategoria, setCategoriaActiva, existeCategoriaDuplicada, seedCategoriasDefault, normalizeCatName } from './categorias.js?v=1';
-import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite } from './permissions.js';
+import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite } from './permissions.js?v=2';
 import { httpsCallable } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js';
+import { renderCorreos } from './email.js?v=3';
 
 let allJugadores = [];
 let jugadorSearchTerm = '';
@@ -23,6 +24,9 @@ let currentUserData = null;
 let allUsuarios = [];
 let _userModalMode = null;
 let _userEditId = null;
+let _syncData = { missingFromFirestore: [], missingFromAuth: [] };
+let _syncPageToken = null;
+let _syncLoading = false;
 
 function esc(s) {
     if (!s) return '';
@@ -959,9 +963,31 @@ async function loadAdminConfig() {
                     setCurrentUser(currentUserData);
                     console.log('[admin] legacy admin user, treating as FULL');
                 } else {
-                    currentUserData = null;
-                    setCurrentUser(null);
-                    console.warn('[admin] user not in usuarios collection and not in adminUids');
+                    // Nuevo usuario de Auth sin documento en Firestore: crear cuenta automática (PENDIENTE de asignación de rol)
+                    try {
+                        const today = new Date();
+                        await setDoc(doc(db, 'usuarios', auth.currentUser.uid), {
+                            email: auth.currentUser.email,
+                            nombre: auth.currentUser.displayName || auth.currentUser.email,
+                            rol: 'PENDIENTE',
+                            activo: true,
+                            createdAt: today,
+                            lastLogin: today
+                        }, { merge: true });
+                        currentUserData = {
+                            uid: auth.currentUser.uid,
+                            email: auth.currentUser.email,
+                            nombre: auth.currentUser.displayName || auth.currentUser.email,
+                            rol: 'PENDIENTE',
+                            activo: true
+                        };
+                        setCurrentUser(currentUserData);
+                        toast('Cuenta creada automáticamente. Rol PENDIENTE de asignación por el administrador.', 'info');
+                    } catch (e) {
+                        console.error('[admin] Error creando doc de usuario:', e);
+                        currentUserData = null;
+                        setCurrentUser(null);
+                    }
                 }
             }
         } catch (e) {
@@ -971,7 +997,8 @@ async function loadAdminConfig() {
 }
 
 function isCurrentUserAdmin(user) {
-    return user && currentAdminUids.includes(user.uid);
+    const validRols = [ROLES.MASTER, ROLES.FULL, ROLES.MARCADORES, 'PENDIENTE'];
+    return user && (currentAdminUids.includes(user.uid) || (currentUserData && validRols.includes(currentUserData.rol)));
 }
 
 async function initializeAdminPanel(user) {
@@ -1018,17 +1045,14 @@ function applyUIPermissions() {
     const rol = getCurrentUserRole();
     console.log('[admin] applyUIPermissions, rol:', rol);
 
-    const tabUsuarios = document.getElementById('tab-usuarios');
-    if (tabUsuarios) {
-        tabUsuarios.style.display = rol === ROLES.MASTER ? '' : 'none';
-    }
-
     const tabsPorRol = {
+        usuarios: [ROLES.MARCADORES],
         jugadores: [ROLES.MARCADORES],
         equipos: [ROLES.MARCADORES],
         torneos: [ROLES.MARCADORES],
         administracion: [ROLES.MARCADORES],
-        categorias: [ROLES.MARCADORES]
+        categorias: [ROLES.MARCADORES],
+        correos: [ROLES.MARCADORES]
     };
 
     Object.entries(tabsPorRol).forEach(([panel, rolesExcluidos]) => {
@@ -1243,6 +1267,7 @@ function renderPanel(panelId) {
         case 'administracion': renderAdministracion(); break;
         case 'usuarios': renderUsuarios(); break;
         case 'categorias': renderCategorias(); break;
+        case 'correos': renderCorreos(); break;
     }
 }
 
@@ -1598,6 +1623,7 @@ async function addJugador() {
         if (data.pago_recibido) {
             await syncInscripcionIngreso(ref.id);
         }
+        sendWelcomeEmail(data, ref.id);
         await refreshData();
     } catch (e) {
         toast('Error al agregar jugador', 'error');
@@ -1605,6 +1631,20 @@ async function addJugador() {
     } finally {
         hideLoading();
     }
+}
+
+function sendWelcomeEmail(jugadorData, jugadorId) {
+    const tid = getActiveTournamentId();
+    if (!tid || !jugadorData.email) return;
+    const fn = httpsCallable(functions, 'emailSendBienvenida');
+    fn({
+        torneoId: tid,
+        toEmail: jugadorData.email,
+        toNombre: (jugadorData.nombre || '') + ' ' + (jugadorData.apellidos || ''),
+        jugadorId
+    }).catch(err => {
+        console.warn('[correos] No se pudo enviar bienvenida:', err.message || err);
+    });
 }
 
 function editJugador(id) {
@@ -6495,9 +6535,12 @@ async function renderUsuarios() {
         let html = '<div class="admin-section-title" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;">' +
             '<span><span class="material-symbols-outlined" style="font-size:0.9rem;">manage_accounts</span> ' +
             'Gestión de Usuarios (' + allUsuarios.length + ')</span>' +
+            '<div style="display:flex;gap:0.4rem;">' +
+            '<button id="sync-btn" class="btn btn-sm btn-outline" onclick="showSyncPanel()" style="padding:0.35rem 0.7rem;font-size:0.75rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:0.85rem;">sync_alt</span> Sincronizar</button>' +
             '<button class="btn btn-primary" onclick="openUserModal(\'crear\')" style="padding:0.4rem 0.8rem;font-size:0.8rem;">' +
             '<span class="material-symbols-outlined" style="font-size:0.9rem;">person_add</span> Nuevo</button>' +
-            '</div>';
+            '</div></div>';
 
         if (allUsuarios.length === 0) {
             html += '<div class="empty-state" style="padding:2rem;text-align:center;">' +
@@ -6565,6 +6608,246 @@ async function renderUsuarios() {
         panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
             '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--error);">error</span>' +
             '<p style="margin-top:0.5rem;">Error al cargar usuarios.</p></div>';
+    }
+}
+
+async function showSyncPanel() {
+    const panel = document.getElementById('panel-usuarios');
+    if (!panel) return;
+
+    if (_syncLoading || _syncData.missingFromFirestore.length > 0) {
+        panel.innerHTML = '';
+        renderUsuarios();
+        return;
+    }
+
+    _syncLoading = true;
+    panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+        '<span class="material-symbols-outlined" style="font-size:2rem;">sync_alt</span>' +
+        '<p style="margin-top:0.5rem;">Cargando datos de sincronización...</p></div>';
+
+    try {
+        const importMissingUsersFn = httpsCallable(functions, 'importMissingUsers');
+        const syncListUsersFn = httpsCallable(functions, 'syncListUsers');
+
+        let result = await syncListUsersFn({ limit: 50, pageToken: _syncPageToken || null });
+        _syncData = result.data;
+
+        let html = '<div style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;">' +
+            '<h3 style="margin:0;font-size:1rem;"><span class="material-symbols-outlined">sync_alt</span> Sincronización Firebase Auth ↔ Firestore</h3>' +
+            '<button class="btn btn-sm btn-outline" onclick="renderUsuarios()" style="padding:0.35rem 0.7rem;font-size:0.75rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:0.85rem;">arrow_back</span> Volver</button>' +
+            '</div>';
+
+        if (_syncData.missingFromFirestore && _syncData.missingFromFirestore.length > 0) {
+            html += '<div style="background:#FFF3E0;border-left:4px solid #FF9800;padding:0.8rem;margin-bottom:1rem;border-radius:4px;">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">' +
+                '<strong style="color:#E65100;">⚠️ En Auth sin Firestore (' + _syncData.missingFromFirestore.length + ')</strong>' +
+                '<button id="import-btn" class="btn btn-primary" onclick="importMissingUsers()" style="padding:0.35rem 0.7rem;font-size:0.75rem;">' +
+                '<span class="material-symbols-outlined" style="font-size:0.85rem;">download</span> Importar todos</button>' +
+                '</div>';
+            html += '<p style="font-size:0.8rem;color:#BF360C;margin:0;">Usuarios creados en Firebase Console sin documento en Firestore.</p>';
+            html += '</div>';
+
+            html += '<div class="card">';
+            _syncData.missingFromFirestore.forEach((u) => {
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid var(--outline-variant);">' +
+                    '<div>' +
+                    '<div style="font-weight:600;font-size:0.85rem;">' + esc(u.displayName || u.email) + '</div>' +
+                    '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">' + esc(u.email) + '</div>' +
+                    (u.disabled ? '<span class="badge badge-danger" style="font-size:0.65rem;">Desactivado</span>' : '') +
+                    '</div>' +
+                    '<div style="text-align:right;">' +
+                    (u.lastLoginAt ? '<div style="font-size:0.7rem;color:var(--on-surface-variant-30);">Último acceso: ' + formatDateFull(new Date(u.lastLoginAt)) + '</div>' : '') +
+                    '</div>' +
+                    '</div>';
+            });
+            html += '</div>';
+
+            if (_syncData.hasMore && _syncData.missingFromFirestore.length < 50) {
+                _syncPageToken = _syncData.nextPageToken;
+                html += '<button id="load-more-sync" class="btn btn-outline" onclick="loadMoreSync()" style="width:100%;margin-top:1rem;">' +
+                    '<span class="material-symbols-outlined">expand_more</span> Cargar más</button>';
+            }
+        } else {
+            html += '<div style="background:#E8F5E9;border-left:4px solid #4CAF50;padding:0.8rem;margin-bottom:1rem;border-radius:4px;">';
+            html += '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+                '<span class="material-symbols-outlined" style="color:#2E7D32;">check_circle</span>' +
+                '<strong style="color:#1B5E20;">Todos sincronizados</strong>' +
+                '</div>' +
+                '<p style="font-size:0.8rem;color:#388E3C;margin:0.25rem 0 0;">No hay usuarios en Auth que falten en Firestore.</p>' +
+                '</div>';
+        }
+
+        if (_syncData.missingFromAuth && _syncData.missingFromAuth.length > 0) {
+            html += '<div style="background:#FCE4EC;border-left:4px solid #E91E63;padding:0.8rem;margin-bottom:1rem;border-radius:4px;">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">' +
+                '<strong style="color:#AD1457;">🔗 Orphans en Firestore (' + _syncData.missingFromAuth.length + ')</strong>' +
+                '</div>';
+            html += '<p style="font-size:0.8rem;color:#C2185B;margin:0;">Docs en Firestore sin usuario en Auth.</p>';
+            html += '</div>';
+
+            html += '<div class="card">';
+            _syncData.missingFromAuth.forEach(u => {
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid var(--outline-variant);">' +
+                    '<div>' +
+                    '<div style="font-weight:600;font-size:0.85rem;">' + esc(u.nombre || '—') + '</div>' +
+                    '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">' + esc(u.email) + '</div>' +
+                    '<span class="badge badge-outline" style="font-size:0.65rem;">' + esc(u.rol) + '</span>' +
+                    '</div>' +
+                    '<div style="font-size:0.7rem;color:var(--on-surface-variant-30);word-break:break-all;">UID: ' + esc(u.uid) + '</div>' +
+                    '</div>';
+            });
+            html += '</div>';
+        }
+
+        html += '<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--outline-variant);">';
+        html += '<h4 style="margin:0 0 0.5rem;font-size:0.9rem;">Importación manual</h4>';
+        html += '<p style="font-size:0.8rem;color:var(--on-surface-variant-40);margin:0 0 0.5rem;">Si un email fue creado diferente en Auth vs Firestore, ingresá aquí:</p>';
+        html += '<textarea id="manual-emails" placeholder="email1@example.com&#10;email2@example.com&#10;..." style="width:100%;min-height:80px;padding:0.5rem;font-family:monospace;font-size:0.8rem;border:1px solid var(--outline);border-radius:4px;"></textarea>';
+        html += '<button id="manual-import-btn" class="btn btn-primary" onclick="manualImport()" style="margin-top:0.5rem;width:auto;padding:0.35rem 0.7rem;font-size:0.75rem;">' +
+            '<span class="material-symbols-outlined" style="font-size:0.85rem;">download</span> Importar emails</button>' +
+            '</div>';
+
+        panel.innerHTML = html;
+
+        const importBtn = document.getElementById('import-btn');
+        if (importBtn) importBtn.addEventListener('click', importMissingUsers);
+
+        const loadMoreBtn = document.getElementById('load-more-sync');
+        if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMoreSync);
+
+    } catch (e) {
+        console.error('[admin] Error loading sync data:', e);
+        panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+            '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--error);">error</span>' +
+            '<p style="margin-top:0.5rem;">Error al cargar datos de sincronización.</p>' +
+            '<pre style="font-size:0.7rem;color:var(--error);margin-top:0.5rem;white-space:pre-wrap;">' + esc(e.message) + '</pre></div>';
+    } finally {
+        _syncLoading = false;
+    }
+}
+
+async function loadMoreSync() {
+    const btn = document.getElementById('load-more-sync');
+    if (btn) btn.style.display = 'none';
+
+    try {
+        const syncListUsersFn = httpsCallable(functions, 'syncListUsers');
+        let result = await syncListUsersFn({ limit: 50, pageToken: _syncPageToken });
+        _syncData = result.data;
+
+        const card = document.querySelector('.card');
+        if (card) {
+            _syncData.missingFromFirestore.forEach((u) => {
+                card.innerHTML += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid var(--outline-variant);">' +
+                    '<div>' +
+                    '<div style="font-weight:600;font-size:0.85rem;">' + esc(u.displayName || u.email) + '</div>' +
+                    '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">' + esc(u.email) + '</div>' +
+                    (u.disabled ? '<span class="badge badge-danger" style="font-size:0.65rem;">Desactivado</span>' : '') +
+                    '</div>' +
+                    '<div style="text-align:right;">' +
+                    (u.lastLoginAt ? '<div style="font-size:0.7rem;color:var(--on-surface-variant-30);">Acceso: ' + formatDateFull(new Date(u.lastLoginAt)) + '</div>' : '') +
+                    '</div>' +
+                    '</div>';
+            });
+
+            if (_syncData.hasMore && _syncData.missingFromFirestore.length >= 50) {
+                const newBtn = document.createElement('button');
+                newBtn.id = 'load-more-sync';
+                newBtn.className = 'btn btn-outline';
+                newBtn.style.cssText = 'width:100%;margin-top:1rem;';
+                newBtn.innerHTML = '<span class="material-symbols-outlined">expand_more</span> Cargar más';
+                newBtn.addEventListener('click', loadMoreSync);
+                card.parentElement.appendChild(newBtn);
+            }
+
+            if (_syncData.missingFromFirestore.length === 0) {
+                card.remove();
+            }
+        }
+
+        _syncPageToken = _syncData.nextPageToken;
+    } catch (e) {
+        console.error('[admin] Error loading more sync data:', e);
+        toast('Error al cargar más datos', 'error');
+    }
+}
+
+async function importMissingUsers() {
+    const btn = document.getElementById('import-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Importando...';
+    }
+
+    try {
+        const importMissingUsersFn = httpsCallable(functions, 'importMissingUsers');
+        const emails = _syncData.missingFromFirestore.map(u => u.email);
+
+        const result = await importMissingUsersFn({ emails });
+
+        let msg = 'Importación completada:\n';
+        msg += '✅ Creados: ' + result.data.imported.length + '\n';
+        msg += '⏭️ Saltados: ' + result.data.skipped.length + '\n';
+        if (result.data.errors.length > 0) {
+            msg += '❌ Errores: ' + result.data.errors.length;
+        }
+
+        alert(msg);
+
+        _syncData.missingFromFirestore = [];
+        showSyncPanel();
+        renderUsuarios();
+    } catch (e) {
+        console.error('[admin] Error importing users:', e);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.85rem;">download</span> Importar todos';
+        }
+        toast('Error al importar: ' + e.message, 'error');
+    }
+}
+
+async function manualImport() {
+    const textarea = document.getElementById('manual-emails');
+    if (!textarea) return;
+
+    const emails = textarea.value.split('\n').map(e => e.trim()).filter(e => e.includes('@'));
+    if (emails.length === 0) {
+        toast('Ingresá al menos un email válido', 'warning');
+        return;
+    }
+
+    const btn = document.getElementById('manual-import-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Importando...';
+    }
+
+    try {
+        const importMissingUsersFn = httpsCallable(functions, 'importMissingUsers');
+        const result = await importMissingUsersFn({ emails });
+
+        let msg = 'Importación manual:\n';
+        msg += '✅ Creados: ' + result.data.imported.length + '\n';
+        msg += '⏭️ Saltados: ' + result.data.skipped.length + '\n';
+        if (result.data.errors.length > 0) {
+            msg += '❌ Errores:\n';
+            result.data.errors.forEach(err => { msg += '  - ' + err.email + ': ' + err.reason + '\n'; });
+        }
+
+        alert(msg);
+
+        textarea.value = '';
+        renderUsuarios();
+    } catch (e) {
+        console.error('[admin] Error in manual import:', e);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.85rem;">download</span> Importar emails';
+        }
+        toast('Error: ' + e.message, 'error');
     }
 }
 
@@ -6730,6 +7013,10 @@ window.openUserModal = openUserModal;
 window.closeUserModal = closeUserModal;
 window.saveUserModal = saveUserModal;
 window.renderUsuarios = renderUsuarios;
+window.showSyncPanel = showSyncPanel;
+window.importMissingUsers = importMissingUsers;
+window.loadMoreSync = loadMoreSync;
+window.manualImport = manualImport;
 
 // ── Service Worker Registration ──
 if ('serviceWorker' in navigator) {
