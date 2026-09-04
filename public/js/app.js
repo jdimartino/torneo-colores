@@ -862,6 +862,7 @@ function renderEquipos() {
                 '<span class="equipo-title">' + esc(eq.nombre) + '</span>' +
                 '<span class="equipo-count">' + jugadoresEq.length + '</span>' +
                 '<span class="material-symbols-outlined chev">expand_more</span>' +
+                '<span class="equipo-hint">Clic para detalles</span>' +
             '</div>' +
             '<div class="equipo-body">' + jugadoresHtml + '</div>' +
         '</div>';

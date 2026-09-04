@@ -3075,6 +3075,18 @@ td.col-player { text-align: left; }
 }
 .card-equipos.open .chev { transform: rotate(180deg); color: var(--primary); }
 
+.card-equipos .equipo-header .equipo-hint {
+  order: 99;
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  margin-top: 0.15rem;
+  transition: opacity 0.2s;
+}
+.card-equipos.open .equipo-header .equipo-hint { display: none; }
+
 .card-equipos .equipo-body {
   display: none; padding: 0 1rem 1rem; flex-direction: column; gap: 0.3rem;
 }

@@ -356,15 +356,43 @@ function formatBs(monto) {
 
 // Date format conversion functions
 function formatDateToDDMM(dateStr) {
-    if (!dateStr) return '';
-    const [year, month, day] = dateStr.split('-');
-    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}`;
+    const ymd = formatDateToYYYYMMDD(dateStr);
+    if (!ymd) return '';
+    const [year, month, day] = ymd.split('-');
+    return `${day}/${month}`;
 }
 
 function formatDateToYYYYMMDD(dateStr) {
     if (!dateStr) return '';
-    const [day, month, year] = dateStr.split('/');
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    let s = String(dateStr).trim();
+
+    // Acceptance of Firestore Timestamp / Date object
+    if (typeof dateStr.toDate === 'function') s = dateStr.toDate();
+    if (s instanceof Date && !isNaN(s.getTime())) {
+        const d = s;
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    if (s instanceof Date) return '';
+
+    // Already YYYY-MM-DD
+    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) {
+        const [year, month, day] = s.split('-');
+        return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    }
+
+    // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (milestones with year) or DD/MM (legacy, no year)
+    const m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2,4}))?$/);
+    if (!m) return '';
+    const day = m[1].padStart(2, '0');
+    const month = m[2].padStart(2, '0');
+    let year = m[3];
+    if (!year) {
+        year = String(new Date().getFullYear());
+    } else if (year.length === 2) {
+        year = '20' + year;
+    }
+    if (day < '01' || day > '31' || month < '01' || month > '12') return '';
+    return year + '-' + month + '-' + day;
 }
 
 function getEquivalenteBs(monto, moneda) {
@@ -895,16 +923,250 @@ function renderReportes() {
         return;
     }
 
-    let html = '<div class="card" style="padding:1.25rem;">';
-    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">monitoring</span> Reportes</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-top:0.75rem;">';
-    html += '<button class="btn btn-outline" id="btn-report-pdf" style="flex:1 1 140px;justify-content:center;"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Listado de jugadores</button>';
+    const { sinPagar, exonerados, pagados } = getGruposEstatusPago();
+    const { grupos: gruposEq, sinEquipo } = getGruposEquipos();
+
+    let html = '';
+
+    html += '<div class="card" style="padding:1.25rem;">';
+    html += '<div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">';
+    html += '<div style="display:flex;align-items:center;gap:0.5rem;min-width:0;">';
+    html += '<span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary);">groups</span>';
+    html += '<div>' +
+        '<div style="font-family:\'Lexend\',sans-serif;font-weight:600;font-size:0.85rem;">Listado de jugadores</div>' +
+        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);">Agrupado por equipo</div>' +
+        '</div>';
     html += '</div>';
+    html += '<button class="btn btn-primary" id="btn-report-listado" style="margin-left:auto;"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Exportar PDF</button>';
+    html += '</div>';
+
+    html += '<div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin:0.85rem 0 0.25rem;">';
+    html += '<span class="badge badge-muted">' + allJugadores.length + ' Total</span>';
+    gruposEq.forEach(g => {
+        if (g.jugadores.length) {
+            const c = g.equipo.color || '#888';
+            html += '<span class="badge" style="background:' + esc(c) + '22;color:' + esc(c) + ';">' + esc(g.equipo.nombre) + ' ' + g.jugadores.length + '</span>';
+        }
+    });
+    if (sinEquipo.length) {
+        html += '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);">Sin equipo ' + sinEquipo.length + '</span>';
+    }
+    html += '</div>';
+
+    gruposEq.forEach(g => {
+        if (!g.jugadores.length) return;
+        html += renderSeccionCol('eq', g.equipo.id, g.equipo.nombre, g.jugadores, listadoItemRow, { dot: g.equipo.color || '#888' });
+    });
+    if (sinEquipo.length) {
+        html += renderSeccionCol('eq', 'sin-equipo', 'SIN EQUIPO', sinEquipo, listadoItemRow);
+    }
+
+    html += '</div>';
+
+    html += '<div class="card" style="padding:1.25rem;">';
+    html += '<div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+    html += '<div style="display:flex;align-items:center;gap:0.5rem;min-width:0;">';
+    html += '<span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--secondary);">payments</span>';
+    html += '<div>' +
+        '<div style="font-family:\'Lexend\',sans-serif;font-weight:600;font-size:0.85rem;">Estatus de pago</div>' +
+        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);">Pagados, exonerados y pendientes</div>' +
+        '</div>';
+    html += '</div>';
+    html += '<button class="btn btn-primary" id="btn-report-estatus" style="margin-left:auto;"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Exportar PDF</button>';
+    html += '</div>';
+
+    html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.9rem;">';
+    html += '<span class="badge badge-danger">' + sinPagar.length + ' Sin pagar</span>';
+    html += '<span class="badge badge-muted">' + exonerados.length + ' Exonerados</span>';
+    html += '<span class="badge badge-success">' + pagados.length + ' Pagados</span>';
+    html += '<span class="badge badge-muted">' + allJugadores.length + ' Total</span>';
+    html += '</div>';
+
+    html += renderSeccionCol('est', 'pendiente', 'SIN PAGAR', sinPagar, (j) => estatusItemRow(j, 'pendiente'));
+    html += renderSeccionCol('est', 'exonerado', 'EXONERADOS', exonerados, (j) => estatusItemRow(j, 'exonerado'));
+    html += renderSeccionCol('est', 'pagado', 'PAGADOS', pagados, (j) => estatusItemRow(j, 'pagado'));
+
     html += '</div>';
 
     panel.innerHTML = html;
 
-    document.getElementById('btn-report-pdf').addEventListener('click', exportJugadoresPDF);
+    document.getElementById('btn-report-listado').addEventListener('click', exportJugadoresPDF);
+    document.getElementById('btn-report-estatus').addEventListener('click', exportarEstatusPagoPDF);
+}
+
+function porNombre(a, b) {
+    const nA = ((a.nombre || '') + ' ' + (a.apellidos || '')).toLowerCase();
+    const nB = ((b.nombre || '') + ' ' + (b.apellidos || '')).toLowerCase();
+    return nA.localeCompare(nB);
+}
+
+function getGruposEstatusPago() {
+    const exonerados = allJugadores.filter(j => j.exonerado).sort(porNombre);
+    const pagados = allJugadores.filter(j => !j.exonerado && j.pago_recibido).sort(porNombre);
+    const sinPagar = allJugadores.filter(j => !j.exonerado && !j.pago_recibido).sort(porNombre);
+    return { sinPagar, exonerados, pagados };
+}
+
+function detallePagoJugador(j) {
+    if (j.exonerado) return 'Exonerado';
+    if (!j.pago_recibido) return 'Sin pago';
+    const metodo = j.metodo_pago || 'Pago';
+    let detail = metodo;
+    if (metodo === 'Pago Móvil') {
+        if (j.monto) detail += ' · ' + formatBs(j.monto);
+        if (j.telefono_movil) detail += ' · ' + j.telefono_movil;
+        if (j.numero_operacion) detail += ' · Op: ' + j.numero_operacion;
+    } else if (metodo === 'Efectivo Dólares') {
+        if (j.monto_usd) detail += ' · $' + (+j.monto_usd).toFixed(2);
+    } else if (metodo === 'Otro') {
+        if (j.descripcion_metodo) detail += ' · ' + j.descripcion_metodo;
+        if (j.monto_usd) detail += ' · $' + (+j.monto_usd).toFixed(2);
+        if (j.numero_operacion) detail += ' · Op: ' + j.numero_operacion;
+    } else if (j.numero_operacion || j.fecha_pago) {
+        detail += ' · Op: ' + (j.numero_operacion || '') + (j.fecha_pago ? ' ' + j.fecha_pago : '');
+    }
+    if (j.fecha_pago && metodo !== 'Pago Móvil') detail += ' · ' + j.fecha_pago;
+    return detail;
+}
+
+function estatusItemRow(j, tipo) {
+    const nombre = esc((j.nombre || '') + ' ' + (j.apellidos || ''));
+    const cat = j.categoria ? '<span style="color:var(--primary);">' + esc(j.categoria) + '</span>' : '';
+    const socio = j.status_socio ? esc(j.status_socio) : '';
+    const detalle = tipo === 'pagado' ? detallePagoJugador(j) : (tipo === 'exonerado' ? 'Exonerado' : 'Sin pago');
+    const badgeClass = tipo === 'pagado' ? 'badge-success' : tipo === 'exonerado' ? 'badge-muted' : 'badge-danger';
+    let html = '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0;border-bottom:1px solid var(--white-5);">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + nombre + '</div>';
+    html += '<div style="font-size:0.66rem;color:var(--on-surface-variant-40);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + [cat, socio].filter(Boolean).join(' · ') + '</div>';
+    html += '</div>';
+    if (detalle) {
+        html += '<span class="badge ' + badgeClass + '" style="white-space:nowrap;max-width:45%;overflow:hidden;text-overflow:ellipsis;">' + esc(detalle) + '</span>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function listadoItemRow(j) {
+    const nombre = esc((j.nombre || '') + ' ' + (j.apellidos || ''));
+    const cat = j.categoria ? '<span style="color:var(--primary);font-size:0.6rem;font-weight:600;">' + esc(j.categoria) + '</span>' : '';
+    const gen = j.genero ? esc(j.genero) : '';
+    const tel = j.telefono ? '<span class="material-symbols-outlined" style="font-size:0.6rem;vertical-align:middle;">phone</span> ' + esc(j.telefono) : '';
+    let html = '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0;border-bottom:1px solid var(--white-5);">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:0.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + nombre + '</div>';
+    html += '<div style="font-size:0.62rem;color:var(--on-surface-variant-40);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + [cat, gen, tel].filter(Boolean).join(' · ') + '</div>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+}
+
+function renderSeccionCol(prefix, id, titulo, jugadores, itemFn, opts) {
+    const bodyId = 'col-body-' + prefix + '-' + id;
+    const chevId = 'col-chev-' + prefix + '-' + id;
+    const dotColor = opts && opts.dot;
+    let html = '<button type="button" onclick="toggleCol(\'' + prefix + '\',\'' + id + '\')" style="display:flex;align-items:center;gap:0.4rem;width:100%;background:transparent;border:none;padding:0;margin-top:1rem;cursor:pointer;text-align:left;">';
+    if (dotColor) {
+        html += '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + esc(dotColor) + ';flex-shrink:0;"></span>';
+    }
+    html += '<span style="font-size:0.8rem;font-family:\'Lexend\',sans-serif;font-weight:600;color:var(--on-surface-variant);">' + esc(titulo) + '</span>';
+    html += '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);">' + jugadores.length + '</span>';
+    html += '<span class="material-symbols-outlined" id="' + chevId + '" style="margin-left:auto;font-size:1.1rem;color:var(--on-surface-variant-40);transition:transform 0.2s;">expand_more</span>';
+    html += '</button>';
+
+    html += '<div id="' + bodyId + '" style="display:none;">';
+    if (!jugadores.length) {
+        html += '<div style="padding:0.5rem 0 0.9rem;font-size:0.75rem;color:var(--on-surface-variant-40);">Sin registros</div>';
+    } else {
+        html += '<div style="display:flex;flex-direction:column;">';
+        jugadores.forEach(j => { html += itemFn(j); });
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function toggleCol(prefix, id) {
+    const body = document.getElementById('col-body-' + prefix + '-' + id);
+    const chev = document.getElementById('col-chev-' + prefix + '-' + id);
+    if (!body || !chev) return;
+    const closed = body.style.display === 'none';
+    body.style.display = closed ? 'block' : 'none';
+    chev.style.transform = closed ? 'rotate(180deg)' : '';
+}
+
+function getGruposEquipos() {
+    const grupos = allEquipos.map(eq => ({
+        equipo: eq,
+        jugadores: allJugadores.filter(j => j.equipo_id === eq.id).sort(porNombre)
+    }));
+    const sinEquipo = allJugadores.filter(j => !j.equipo_id).sort(porNombre);
+    return { grupos, sinEquipo };
+}
+
+function exportarEstatusPagoPDF() {
+    if (!allJugadores.length) {
+        toast('No hay jugadores para exportar', 'error');
+        return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const { sinPagar, exonerados, pagados } = getGruposEstatusPago();
+
+    const margin = 15;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('Estatus de Pago', margin, 20);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Torneo de Colores - ' + new Date().toLocaleDateString('es-VE'), margin, 28);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Sin pagar: ' + sinPagar.length + ' · Exonerados: ' + exonerados.length + ' · Pagados: ' + pagados.length, margin, 34);
+    let y = 42;
+
+    const drawSeccion = (titulo, jugadores, tipo) => {
+        if (y > pageHeight - 30) { doc.addPage(); y = 20; }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(0, 0, 0);
+        doc.text(titulo + ' (' + jugadores.length + ')', margin, y);
+        y += 2;
+        doc.setDrawColor(150);
+        doc.setLineWidth(0.3);
+        doc.line(margin, y, pageWidth - margin, y);
+        y += 6;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        if (!jugadores.length) {
+            doc.text('-', margin, y);
+            y += 6;
+        } else {
+            jugadores.forEach(j => {
+                if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+                const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
+                const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
+                let detalle = '';
+                if (tipo === 'pagado') detalle = detallePagoJugador(j);
+                else if (tipo === 'exonerado') detalle = 'Exonerado';
+                else detalle = 'Sin pago';
+                doc.text(nombre, margin, y);
+                doc.text(cat.substring(0, 24), margin + 90, y);
+                doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
+                y += 6;
+            });
+        }
+        y += 6;
+    };
+
+    drawSeccion('SIN PAGAR', sinPagar, 'pendiente');
+    drawSeccion('EXONERADOS', exonerados, 'exonerado');
+    drawSeccion('PAGADOS', pagados, 'pagado');
+
+    doc.save('estatus_pago_torneo.pdf');
+    toast('PDF generado', 'success');
 }
 
 async function renderAdministracion() {
@@ -1167,6 +1429,7 @@ window.saveFinanceModal = saveFinanceModal;
 window.deleteMovimiento = deleteMovimiento;
 window.setFinanceFiltro = setFinanceFiltro;
 window.actualizarTasasManual = actualizarTasasManual;
+window.toggleCol = toggleCol;
 
 window.addEventListener('popstate', () => {
     const panel = (history.state && history.state.panel) || location.hash.replace('#', '') || 'jugadores';
@@ -1448,16 +1711,13 @@ function exportJugadoresPDF() {
     }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const catOrder = Object.fromEntries(CATEGORIAS_JUGADOR.map((c, i) => [c, i]));
-    const sorted = [...allJugadores].sort((a, b) => {
-        const catA = catOrder[a.categoria] ?? 99;
-        const catB = catOrder[b.categoria] ?? 99;
-        if (catA !== catB) return catA - catB;
-        if (a.genero !== b.genero) return (a.genero || '').localeCompare(b.genero || '');
-        return (a.nombre || '').localeCompare(b.nombre || '');
-    });
+    const { grupos, sinEquipo } = getGruposEquipos();
+
     const margin = 15;
-    const colW = (doc.internal.pageSize.getWidth() - margin * 2) / 4;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const colW = (pageWidth - margin * 2) / 4;
+    const headers = ['Nombre', 'Apellido', 'Categoría', 'Género'];
     let y = 20;
 
     doc.setFont('helvetica', 'bold');
@@ -1467,39 +1727,55 @@ function exportJugadoresPDF() {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.text('Torneo de Colores - ' + new Date().toLocaleDateString('es-VE'), margin, y);
+    doc.setFont('helvetica', 'bold');
+    y += 6;
+    doc.text('Total: ' + allJugadores.length + ' jugadores en ' + grupos.length + ' equipos', margin, y);
     y += 10;
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    const headers = ['Nombre', 'Apellido', 'Categoría', 'Género'];
-    headers.forEach((h, i) => doc.text(h, margin + i * colW, y));
-    y += 2;
-    doc.setDrawColor(0);
-    doc.setLineWidth(0.3);
-    doc.line(margin, y, doc.internal.pageSize.getWidth() - margin, y);
-    y += 6;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    sorted.forEach(j => {
-        if (y > doc.internal.pageSize.getHeight() - 20) {
-            doc.addPage();
-            y = 20;
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(10);
-            headers.forEach((h, i) => doc.text(h, margin + i * colW, y));
-            y += 2;
-            doc.line(margin, y, doc.internal.pageSize.getWidth() - margin, y);
-            y += 6;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(9);
-        }
-        doc.text((j.nombre || '').substring(0, 25), margin, y);
-        doc.text((j.apellidos || '').substring(0, 25), margin + colW, y);
-        doc.text(j.categoria || '', margin + colW * 2, y);
-        doc.text(j.genero || '', margin + colW * 3, y);
+    const drawHeader = () => {
+        if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        headers.forEach((h, i) => doc.text(h, margin + i * colW, y));
+        y += 2;
+        doc.setDrawColor(0);
+        doc.setLineWidth(0.3);
+        doc.line(margin, y, pageWidth - margin, y);
         y += 6;
-    });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+    };
+
+    const drawTeam = (titulo, jugadores) => {
+        if (y > pageHeight - 30) { doc.addPage(); y = 20; }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(0, 0, 0);
+        doc.text(titulo + ' (' + jugadores.length + ')', margin, y);
+        y += 2;
+        doc.setDrawColor(150);
+        doc.setLineWidth(0.3);
+        doc.line(margin, y, pageWidth - margin, y);
+        y += 6;
+        drawHeader();
+        if (!jugadores.length) {
+            doc.text('-', margin, y);
+            y += 6;
+        } else {
+            jugadores.forEach(j => {
+                if (y > pageHeight - 20) { doc.addPage(); y = 20; drawHeader(); }
+                doc.text((j.nombre || '').substring(0, 25), margin, y);
+                doc.text((j.apellidos || '').substring(0, 25), margin + colW, y);
+                doc.text((j.categoria || '').substring(0, 20), margin + colW * 2, y);
+                doc.text(j.genero || '', margin + colW * 3, y);
+                y += 6;
+            });
+        }
+        y += 6;
+    };
+
+    grupos.forEach(g => drawTeam(g.equipo.nombre, g.jugadores));
+    if (sinEquipo.length) drawTeam('SIN EQUIPO', sinEquipo);
 
     doc.save('jugadores_torneo.pdf');
     toast('PDF generado', 'success');
@@ -1794,8 +2070,8 @@ function editJugador(id) {
                 equipo_id: document.getElementById('j-equipo').value || null,
                 numero_socio: document.getElementById('j-numero-socio').value.trim(),
                 status_socio: document.getElementById('j-status-socio').value,
-                metodo_pago: document.getElementById('j-metodo-pago').value,
-fecha_pago: formatDateToDDMM(document.getElementById('j-fecha-pago').value),
+metodo_pago: document.getElementById('j-metodo-pago').value,
+                fecha_pago: document.getElementById('j-fecha-pago').value.trim(),
                 numero_operacion: document.getElementById('j-numero-operacion').value.trim(),
                 monto: parseFloat(document.getElementById('j-monto').value) || 0,
                 telefono_movil: document.getElementById('j-telefono-movil').value.trim(),
@@ -1935,7 +2211,7 @@ function handleCSVText(text, sourceLabel) {
             numero_socio: (colMap.numero_socio !== -1 ? (cols[colMap.numero_socio] || '') : '').trim(),
             metodo_pago: metodoPago,
             numero_operacion: (colMap.numero_operacion !== -1 ? (cols[colMap.numero_operacion] || '') : '').trim(),
-            fecha_pago: (colMap.fecha_pago !== -1 ? (cols[colMap.fecha_pago] || '') : '').trim(),
+            fecha_pago: colMap.fecha_pago !== -1 ? formatDateToYYYYMMDD(cols[colMap.fecha_pago] || '') : '',
             monto: montoBs,
             telefono_movil: (colMap.telefono_movil !== -1 ? (cols[colMap.telefono_movil] || '') : '').trim(),
             comprobante: (colMap.comprobante !== -1 ? (cols[colMap.comprobante] || '') : '').trim(),
