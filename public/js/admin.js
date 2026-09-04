@@ -4,7 +4,7 @@ import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy,
 import { loadTournamentConfig, col, docRef, docRefAuto, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, finanzasCol } from './tournamentRefs.js';
 import { renderTournamentPanel, getTournaments, getTournamentName, loadActiveTournamentNames } from './tournament.js?v=2';
 import { calculateStandings } from './standings.js';
-import { CATEGORIAS_JUGADOR, ensureCategorias, getDrawCategoriasActivas, getDrawCategoriasTodas, invalidateCategorias, crearCategoria, editarCategoria, setCategoriaActiva, existeCategoriaDuplicada, seedCategoriasDefault, normalizeCatName } from './categorias.js?v=1';
+import { CATEGORIAS_JUGADOR, ensureCategorias, getDrawCategoriasActivas, getDrawCategoriasTodas, invalidateCategorias, crearCategoria, editarCategoria, eliminarCategoria, existeCategoriaDuplicada, seedCategoriasDefault, normalizeCatName } from './categorias.js?v=2';
 import { ROLES, ROL_LABELS, setCurrentUser, getCurrentUserRole, isMaster, isFull, isMarcadores, canRead, canWrite } from './permissions.js?v=2';
 import { httpsCallable } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js';
 import { renderCorreos } from './email.js?v=3';
@@ -882,6 +882,31 @@ function renderFinanceMovimientos(movimientos) {
     return html;
 }
 
+// ═══════════════════════════════════════════
+// REPORTES
+// ═══════════════════════════════════════════
+function renderReportes() {
+    const panel = document.getElementById('panel-reportes');
+    if (!panel) return;
+    if (!getActiveTournamentId()) {
+        panel.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+            '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--primary);">info</span>' +
+            '<p style="margin-top:0.5rem;">No hay torneo activo. Creá uno desde la pestaña <strong>Torneos</strong>.</p></div>';
+        return;
+    }
+
+    let html = '<div class="card" style="padding:1.25rem;">';
+    html += '<div class="admin-section-title"><span class="material-symbols-outlined" style="font-size:0.9rem;">monitoring</span> Reportes</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-top:0.75rem;">';
+    html += '<button class="btn btn-outline" id="btn-report-pdf" style="flex:1 1 140px;justify-content:center;"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Listado de jugadores</button>';
+    html += '</div>';
+    html += '</div>';
+
+    panel.innerHTML = html;
+
+    document.getElementById('btn-report-pdf').addEventListener('click', exportJugadoresPDF);
+}
+
 async function renderAdministracion() {
     const panel = document.getElementById('panel-administracion');
     if (!panel) return;
@@ -1052,7 +1077,8 @@ function applyUIPermissions() {
         torneos: [ROLES.MARCADORES],
         administracion: [ROLES.MARCADORES],
         categorias: [ROLES.MARCADORES],
-        correos: [ROLES.MARCADORES]
+        correos: [ROLES.MARCADORES],
+        reportes: [ROLES.MARCADORES]
     };
 
     Object.entries(tabsPorRol).forEach(([panel, rolesExcluidos]) => {
@@ -1268,6 +1294,7 @@ function renderPanel(panelId) {
         case 'usuarios': renderUsuarios(); break;
         case 'categorias': renderCategorias(); break;
         case 'correos': renderCorreos(); break;
+        case 'reportes': renderReportes(); break;
     }
 }
 
@@ -1342,7 +1369,6 @@ function renderJugadores() {
         '<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">' +
         '<input type="file" id="csv-file-input" accept=".csv" style="display:none;">' +
         '<button class="btn btn-outline" id="btn-import-csv"><span class="material-symbols-outlined" style="font-size:1rem;">upload_file</span> Importar CSV</button>' +
-        '<button class="btn btn-outline" id="btn-export-pdf"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Exportar PDF</button>' +
         '<span id="csv-file-name" style="font-size:0.75rem;color:var(--on-surface-variant-30);"></span>' +
         '</div>' +
         '<div id="csv-preview" style="display:none;"></div>' +
@@ -1362,7 +1388,6 @@ function renderJugadores() {
     document.getElementById('btn-import-csv').addEventListener('click', () => {
         document.getElementById('csv-file-input').click();
     });
-    document.getElementById('btn-export-pdf').addEventListener('click', exportJugadoresPDF);
     document.getElementById('csv-file-input').addEventListener('change', handleCSVFile);
     const metodoSelect = document.getElementById('j-metodo-pago');
     metodoSelect.addEventListener('change', () => toggleJugadorMetodoPago());
@@ -5080,7 +5105,6 @@ async function renderCategorias() {
                 '</div>' +
                 '<div style="display:flex;gap:0.3rem;">' +
                 '<button class="btn btn-sm btn-outline" data-edit-cat="' + cat.id + '" title="Editar"><span class="material-symbols-outlined" style="font-size:0.8rem;">edit</span></button>' +
-                '<button class="btn btn-sm btn-outline" data-toggle-cat="' + cat.id + '" title="' + (isActive ? 'Desactivar' : 'Activar') + '"><span class="material-symbols-outlined" style="font-size:0.8rem;">' + (isActive ? 'visibility_off' : 'visibility') + '</span></button>' +
                 '</div>' +
                 '</div>' +
                 '</div>';
@@ -5114,24 +5138,6 @@ async function renderCategorias() {
         const catId = btn.dataset.editCat;
         const cat = cats.find(c => c.id === catId);
         if (cat) renderCategoriaForm(cat);
-    }));
-
-    panel.querySelectorAll('[data-toggle-cat]').forEach(btn => btn.addEventListener('click', async () => {
-        const catId = btn.dataset.toggleCat;
-        const cat = cats.find(c => c.id === catId);
-        if (!cat) return;
-        showLoading();
-        try {
-            await setCategoriaActiva(catId, cat.activa === false);
-            await ensureCategorias();
-            toast(cat.activa === false ? 'Categoría activada' : 'Categoría desactivada');
-            renderCategorias();
-        } catch (e) {
-            toast('Error al cambiar estado', 'error');
-            console.error(e);
-        } finally {
-            hideLoading();
-        }
     }));
 }
 
@@ -5177,7 +5183,7 @@ function renderCategoriaForm(existingCat) {
             if (isEdit) {
                 await editarCategoria(existingCat.id, { nombre: newName });
             } else {
-                await crearCategoria({ nombre: newName });
+                await crearCategoria(newName, allCats.length + 1);
             }
             await ensureCategorias();
             toast(isEdit ? 'Categoría actualizada' : 'Categoría creada');
@@ -5192,12 +5198,12 @@ function renderCategoriaForm(existingCat) {
 
     if (isEdit) {
         document.getElementById('btn-cat-delete').addEventListener('click', async () => {
-            if (!confirm('¿Eliminar esta categoría? Los partidos existentes no se borran pero no se mostrarán en el panel.')) return;
+            if (!confirm('¿Eliminar esta categoría permanentemente? Los partidos existentes no se borrarán pero no se mostrarán en el panel.')) return;
             showLoading();
             try {
-                await setCategoriaActiva(existingCat.id, false);
+                await eliminarCategoria(existingCat.id);
                 await ensureCategorias();
-                toast('Categoría desactivada');
+                toast('Categoría eliminada');
                 renderCategorias();
             } catch (e) {
                 toast('Error al eliminar', 'error');

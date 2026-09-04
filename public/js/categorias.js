@@ -3,7 +3,7 @@ export const CATEGORIAS_JUGADOR = ['3ra', '4ta', '5ta', '6ta Libre', '6ta Master
 
 // ── Categorías del Draw — servicio dinámico por torneo ──
 import { db } from './firebase.js';
-import { collection, getDocs, addDoc, updateDoc, writeBatch, doc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, writeBatch, doc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 import { getActiveTournamentId } from './tournamentRefs.js';
 
 // ── Categorías por defecto para el seed ──
@@ -89,12 +89,9 @@ export async function editarCategoria(categoriaId, updates) {
     invalidateCategorias();
 }
 
-// ── Activar / desactivar ──
-export async function setCategoriaActiva(categoriaId, activa) {
-    await updateDoc(docCategoria(categoriaId), {
-        activa: activa,
-        updatedAt: new Date()
-    });
+// ── Eliminar categoría (borrado permanente) ──
+export async function eliminarCategoria(categoriaId) {
+    await deleteDoc(docCategoria(categoriaId));
     invalidateCategorias();
 }
 

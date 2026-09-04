@@ -88,6 +88,12 @@ const MODULOS = {
     icon: 'email',
     read: [ROLES.MASTER, ROLES.FULL],
     write: [ROLES.MASTER, ROLES.FULL]
+  },
+  reportes: {
+    label: 'Reportes',
+    icon: 'monitoring',
+    read: [ROLES.MASTER, ROLES.FULL],
+    write: [ROLES.MASTER, ROLES.FULL]
   }
 };
 
