@@ -1342,6 +1342,7 @@ function renderJugadores() {
         '<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">' +
         '<input type="file" id="csv-file-input" accept=".csv" style="display:none;">' +
         '<button class="btn btn-outline" id="btn-import-csv"><span class="material-symbols-outlined" style="font-size:1rem;">upload_file</span> Importar CSV</button>' +
+        '<button class="btn btn-outline" id="btn-export-pdf"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Exportar PDF</button>' +
         '<span id="csv-file-name" style="font-size:0.75rem;color:var(--on-surface-variant-30);"></span>' +
         '</div>' +
         '<div id="csv-preview" style="display:none;"></div>' +
@@ -1361,6 +1362,7 @@ function renderJugadores() {
     document.getElementById('btn-import-csv').addEventListener('click', () => {
         document.getElementById('csv-file-input').click();
     });
+    document.getElementById('btn-export-pdf').addEventListener('click', exportJugadoresPDF);
     document.getElementById('csv-file-input').addEventListener('change', handleCSVFile);
     const metodoSelect = document.getElementById('j-metodo-pago');
     metodoSelect.addEventListener('change', () => toggleJugadorMetodoPago());
@@ -1412,6 +1414,70 @@ function toggleJugadorForm(open) {
     body.style.display = open ? 'block' : 'none';
     btn.classList.toggle('open', open);
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function exportJugadoresPDF() {
+    if (!allJugadores.length) {
+        toast('No hay jugadores para exportar', 'error');
+        return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const catOrder = Object.fromEntries(CATEGORIAS_JUGADOR.map((c, i) => [c, i]));
+    const sorted = [...allJugadores].sort((a, b) => {
+        const catA = catOrder[a.categoria] ?? 99;
+        const catB = catOrder[b.categoria] ?? 99;
+        if (catA !== catB) return catA - catB;
+        if (a.genero !== b.genero) return (a.genero || '').localeCompare(b.genero || '');
+        return (a.nombre || '').localeCompare(b.nombre || '');
+    });
+    const margin = 15;
+    const colW = (doc.internal.pageSize.getWidth() - margin * 2) / 4;
+    let y = 20;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('Reporte de Jugadores', margin, y);
+    y += 8;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Torneo de Colores - ' + new Date().toLocaleDateString('es-VE'), margin, y);
+    y += 10;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    const headers = ['Nombre', 'Apellido', 'Categoría', 'Género'];
+    headers.forEach((h, i) => doc.text(h, margin + i * colW, y));
+    y += 2;
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.3);
+    doc.line(margin, y, doc.internal.pageSize.getWidth() - margin, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    sorted.forEach(j => {
+        if (y > doc.internal.pageSize.getHeight() - 20) {
+            doc.addPage();
+            y = 20;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            headers.forEach((h, i) => doc.text(h, margin + i * colW, y));
+            y += 2;
+            doc.line(margin, y, doc.internal.pageSize.getWidth() - margin, y);
+            y += 6;
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(9);
+        }
+        doc.text((j.nombre || '').substring(0, 25), margin, y);
+        doc.text((j.apellidos || '').substring(0, 25), margin + colW, y);
+        doc.text(j.categoria || '', margin + colW * 2, y);
+        doc.text(j.genero || '', margin + colW * 3, y);
+        y += 6;
+    });
+
+    doc.save('jugadores_torneo.pdf');
+    toast('PDF generado', 'success');
 }
 
 function renderJugadoresList() {
