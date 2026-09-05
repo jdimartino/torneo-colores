@@ -11,6 +11,9 @@ let allJornadas = [];
 let allEnfrentamientos = [];
 let allSemifinales = [];
 let allFinales = [];
+// Override manual de colapso por jornada en Resultados ({ [jornadaId]: boolean })
+// Si no hay override, el default es: finalizada → colapsada, en curso → expandida
+const jornadaCollapseState = {};
 
 const _teamHelpers = makeTeamHelpers(() => allEquipos);
 const getTeamName = _teamHelpers.getTeamName;
@@ -575,7 +578,7 @@ function renderPartidoCard(p, faseLabel, aColorOverride, bColorOverride, fechaSt
 
     const headerParts = [];
     if (fechaStr) headerParts.push('<span class="res-meta-date">' + esc(fechaStr) + '</span>');
-    headerParts.push('<span class="res-meta-jornada">' + esc(faseLabel) + '</span>');
+    if (faseLabel) headerParts.push('<span class="res-meta-jornada">' + esc(faseLabel) + '</span>');
     headerParts.push('<span class="res-meta-category">' + esc(catLabel) + '</span>');
 
     const ganadorId = deriveGanadorId(p);
@@ -642,8 +645,13 @@ function renderResultados() {
     let html = '<input type="text" id="result-search-public" class="search-input" placeholder="Buscar por nombre de jugador...">';
 
     sortedJornadas.forEach(([jId, jornada]) => {
-        const jornadaName = 'Jornada ' + esc(String(jornada.numero));
         const fechaStr = formatDate(jornada.fecha) || '';
+        const allDone = jornada.partidos.every(p => p.estado === 'finalizado');
+        const total = jornada.partidos.length;
+        const doneCount = jornada.partidos.filter(p => p.estado === 'finalizado').length;
+
+        // Default: finalizada → colapsada, en curso → expandida (override manual persiste)
+        const collapsed = (jId in jornadaCollapseState) ? jornadaCollapseState[jId] : allDone;
 
         // En curso primero, finalizados después
         const sorted = jornada.partidos.slice().sort((a, b) => {
@@ -652,12 +660,36 @@ function renderResultados() {
             return sa - sb;
         });
 
+        html += '<div class="res-jornada-group' + (collapsed ? ' collapsed' : '') + '" data-jid="' + esc(String(jId)) + '">';
+        html += '<button type="button" class="res-jornada-header" data-jid="' + esc(String(jId)) + '">';
+        html += '<span class="res-jornada-title">Jornada ' + esc(String(jornada.numero)) + '</span>';
+        if (fechaStr) html += '<span class="res-jornada-fecha">' + esc(fechaStr) + '</span>';
+        html += '<span class="res-jornada-count">' + doneCount + '/' + total + '</span>';
+        html += allDone
+            ? '<span class="res-jornada-badge done"><span class="res-final-dot"></span>Finalizada</span>'
+            : '<span class="res-jornada-badge live"><span class="res-live-dot"></span>En curso</span>';
+        html += '<span class="material-symbols-outlined chevron">expand_more</span>';
+        html += '</button>';
+        html += '<div class="res-jornada-body">';
         sorted.forEach(p => {
-            html += renderPartidoCard(p, jornadaName, null, null, fechaStr);
+            html += renderPartidoCard(p, null, null, null, fechaStr);
         });
+        html += '</div></div>';
     });
 
     el.innerHTML = html;
+
+    // Toggles de colapso por jornada
+    el.querySelectorAll('.res-jornada-header').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const group = btn.closest('.res-jornada-group');
+            if (!group) return;
+            const jid = group.dataset.jid;
+            const nowCollapsed = !group.classList.contains('collapsed');
+            group.classList.toggle('collapsed', nowCollapsed);
+            if (jid) jornadaCollapseState[jid] = nowCollapsed;
+        });
+    });
 
     const resultSearch = document.getElementById('result-search-public');
     if (resultSearch) {
@@ -665,8 +697,25 @@ function renderResultados() {
             clearTimeout(resultSearch._debounce);
             resultSearch._debounce = setTimeout(() => {
                 const term = resultSearch.value.toLowerCase();
-                document.querySelectorAll('.res-public-card').forEach(card => {
-                    card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
+                el.querySelectorAll('.res-jornada-group').forEach(group => {
+                    let anyVisible = false;
+                    group.querySelectorAll('.res-public-card').forEach(card => {
+                        const visible = card.textContent.toLowerCase().includes(term);
+                        card.style.display = visible ? '' : 'none';
+                        if (visible) anyVisible = true;
+                    });
+                    if (term) {
+                        // Buscando: ocultar grupos sin coincidencias y expandir los que tienen
+                        group.style.display = anyVisible ? '' : 'none';
+                        if (anyVisible) group.classList.remove('collapsed');
+                    } else {
+                        // Sin búsqueda: restaurar estado por defecto/override
+                        group.style.display = '';
+                        group.classList.toggle('collapsed', !!jornadaCollapseState[group.dataset.jid]);
+                        group.querySelectorAll('.res-public-card').forEach(card => {
+                            card.style.display = '';
+                        });
+                    }
                 });
             }, 150);
         });

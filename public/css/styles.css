@@ -2081,6 +2081,63 @@ td.col-player { text-align: left; }
   color: var(--success-green);
   font-weight: 700;
 }
+
+/* Grupos por jornada (Resultados) */
+.res-jornada-group {
+  margin-bottom: 1rem;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0a1628;
+}
+.res-jornada-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  gap: 0.45rem;
+  background: linear-gradient(90deg, #1e3a5f 0%, #0f2540 100%);
+  border: none;
+  border-bottom: 1px solid #1e3a5f;
+  color: #4da6ff;
+  font-family: 'Lexend', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+.res-jornada-header:hover {
+  background: linear-gradient(90deg, #24466f 0%, #13294a 100%);
+}
+.res-jornada-title { color: #ffffff; }
+.res-jornada-fecha { color: rgba(255, 255, 255, 0.45); }
+.res-jornada-count { color: rgba(255, 255, 255, 0.45); }
+.res-jornada-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.res-jornada-badge.done { color: #8899aa; }
+.res-jornada-badge.live { color: #3fff8b; }
+.res-jornada-header .chevron {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.55);
+  transition: transform 0.2s ease;
+}
+.res-jornada-group.collapsed .res-jornada-header .chevron { transform: rotate(-90deg); }
+.res-jornada-group.collapsed .res-jornada-header { border-bottom-color: transparent; }
+.res-jornada-body { padding: 0.6rem 0.6rem 0.15rem; }
+.res-jornada-body .res-public-card { margin-bottom: 0.6rem; }
+.res-jornada-body .res-public-card:last-child { margin-bottom: 0; }
+.res-jornada-group.collapsed .res-jornada-body { display: none; }
+
 .btn-compact {
   padding: 0.2rem 0.5rem !important;
   height: 1.5rem !important;
@@ -2167,6 +2224,11 @@ td.col-player { text-align: left; }
   .res-public-header {
     font-size: 0.62rem;
     padding: 0.35rem 0.6rem;
+  }
+  .res-jornada-header {
+    font-size: 0.65rem;
+    padding: 0.45rem 0.6rem;
+    gap: 0.35rem;
   }
 }
 
