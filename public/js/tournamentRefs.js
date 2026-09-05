@@ -1,4 +1,4 @@
-import { db } from './firebase.js';
+import { db } from './firebasePublic.js';
 import { collection, doc, getDoc, setDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 
 let _activeTournamentId = null;

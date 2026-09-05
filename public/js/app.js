@@ -1,5 +1,5 @@
 import { getDocs, getDoc, doc, collection, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
-import { db } from './firebase.js';
+import { db } from './firebasePublic.js';
 import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
 import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers } from './utils.js';

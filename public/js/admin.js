@@ -988,10 +988,33 @@ function renderReportes() {
 
     html += '</div>';
 
+    const invitados = getInvitadosDeportivos();
+
+    html += '<div class="card" style="padding:1.25rem;">';
+    html += '<div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+    html += '<div style="display:flex;align-items:center;gap:0.5rem;min-width:0;">';
+    html += '<span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--tertiary,var(--secondary));">group_add</span>';
+    html += '<div>' +
+        '<div style="font-family:\'Lexend\',sans-serif;font-weight:600;font-size:0.85rem;">Invitados Deportivos</div>' +
+        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);">Nombre, apellido y status</div>' +
+        '</div>';
+    html += '</div>';
+    html += '<button class="btn btn-primary" id="btn-report-invitados" style="margin-left:auto;"><span class="material-symbols-outlined" style="font-size:1rem;">download</span> Exportar PDF</button>';
+    html += '</div>';
+
+    html += '<div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin:0.85rem 0 0.25rem;">';
+    html += '<span class="badge badge-muted">' + invitados.length + ' Invitados Deportivos</span>';
+    html += '</div>';
+
+    html += renderSeccionCol('inv', 'invitados', 'INVITADOS DEPORTIVOS', invitados, invitadoItemRow);
+
+    html += '</div>';
+
     panel.innerHTML = html;
 
     document.getElementById('btn-report-listado').addEventListener('click', exportJugadoresPDF);
     document.getElementById('btn-report-estatus').addEventListener('click', exportarEstatusPagoPDF);
+    document.getElementById('btn-report-invitados').addEventListener('click', exportarInvitadosPDF);
 }
 
 function porNombre(a, b) {
@@ -1005,6 +1028,26 @@ function getGruposEstatusPago() {
     const pagados = allJugadores.filter(j => !j.exonerado && j.pago_recibido).sort(porNombre);
     const sinPagar = allJugadores.filter(j => !j.exonerado && !j.pago_recibido).sort(porNombre);
     return { sinPagar, exonerados, pagados };
+}
+
+function getInvitadosDeportivos() {
+    return allJugadores.filter(j => (j.status_socio || '').trim() === 'Invitado Deportivo').sort(porNombre);
+}
+
+function invitadoItemRow(j) {
+    const nombre = esc((j.nombre || '').trim());
+    const apellido = esc((j.apellidos || '').trim());
+    let html = '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0;border-bottom:1px solid var(--white-5);">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:0.8rem;font-weight:600;display:flex;gap:0.5rem;flex-wrap:wrap;">';
+    if (nombre) html += '<span>' + nombre + '</span>';
+    if (apellido) html += '<span style="color:var(--on-surface-variant-60);font-weight:400;">' + apellido + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:0.66rem;color:var(--on-surface-variant-40);margin-top:0.1rem;">Invitado Deportivo</div>';
+    html += '</div>';
+    html += '<span class="badge badge-muted" style="white-space:nowrap;">Invitado Deportivo</span>';
+    html += '</div>';
+    return html;
 }
 
 function detallePagoJugador(j) {
@@ -1166,6 +1209,56 @@ function exportarEstatusPagoPDF() {
     drawSeccion('PAGADOS', pagados, 'pagado');
 
     doc.save('estatus_pago_torneo.pdf');
+    toast('PDF generado', 'success');
+}
+
+function exportarInvitadosPDF() {
+    const invitados = getInvitadosDeportivos();
+    if (!invitados.length) {
+        toast('No hay invitados deportivos para exportar', 'error');
+        return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    const margin = 15;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const colW = (pageWidth - margin * 2) / 3;
+    let y = 20;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('Invitados Deportivos', margin, y);
+    y += 8;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Torneo de Colores - ' + new Date().toLocaleDateString('es-VE'), margin, y);
+    doc.setFont('helvetica', 'bold');
+    y += 6;
+    doc.text('Total: ' + invitados.length + ' invitados deportivos', margin, y);
+    y += 10;
+
+    doc.setFontSize(10);
+    ['Nombre', 'Apellido', 'Invitado Deportivo'].forEach((h, i) => {
+        doc.setFont('helvetica', 'bold');
+        doc.text(h, margin + i * colW, y);
+    });
+    doc.setDrawColor(150);
+    doc.setLineWidth(0.3);
+    doc.line(margin, y + 2, pageWidth - margin, y + 2);
+    y += 8;
+
+    doc.setFont('helvetica', 'normal');
+    invitados.forEach(j => {
+        if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+        doc.text((j.nombre || '').substring(0, 24), margin, y);
+        doc.text((j.apellidos || '').substring(0, 24), margin + colW, y);
+        doc.text('Invitado Deportivo', margin + colW * 2, y);
+        y += 6;
+    });
+
+    doc.save('invitados_deportivos_torneo.pdf');
     toast('PDF generado', 'success');
 }
 
