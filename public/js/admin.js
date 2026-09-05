@@ -1552,6 +1552,7 @@ async function loadData() {
         allEquipos = e.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
         allJornadas = n.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
         console.log('[admin] loadData:', allJugadores.length, 'jugadores,', allEquipos.length, 'equipos,', allJornadas.length, 'jornadas');
+        autoFixGanadores();
     } catch (e) { console.error('[admin] loadData error:', e); }
 }
 
@@ -3416,9 +3417,10 @@ function determineMatchWinner(s1A, s1B, s2A, s2B, tb1A, tb1B, tb2A, tb2B, stbA, 
     if (setsA === 2) return 'a';
     if (setsB === 2) return 'b';
 
-    if (!isNaN(stbA) && !isNaN(stbB)) {
-        if (stbA > stbB) return 'a';
-        if (stbB > stbA) return 'b';
+    const stbl = parseInt(stbA), stbv = parseInt(stbB);
+    if (!isNaN(stbl) && !isNaN(stbv)) {
+        if (stbl > stbv) return 'a';
+        if (stbv > stbl) return 'b';
     }
     return null;
 }
@@ -3506,6 +3508,81 @@ async function recalculateAllGames() {
     }
 }
 window.recalculateAllGames = recalculateAllGames;
+
+// ── Auto-reparación de ganadores guardados con el bug de comparación de strings en el STB ──
+async function autoFixGanadores() {
+    const tid = getActiveTournamentId();
+    if (!tid) return;
+    let fixedCount = 0;
+
+    const computeWinnerId = (p) => {
+        if (!p || p.estado !== 'finalizado') return null;
+        const g = determineMatchWinner(
+            p.set1_a != null ? String(p.set1_a) : '',
+            p.set1_b != null ? String(p.set1_b) : '',
+            p.set2_a != null ? String(p.set2_a) : '',
+            p.set2_b != null ? String(p.set2_b) : '',
+            p.tiebreak1_a != null ? String(p.tiebreak1_a) : '',
+            p.tiebreak1_b != null ? String(p.tiebreak1_b) : '',
+            p.tiebreak2_a != null ? String(p.tiebreak2_a) : '',
+            p.tiebreak2_b != null ? String(p.tiebreak2_b) : '',
+            p.supertiebreak_a != null ? String(p.supertiebreak_a) : '',
+            p.supertiebreak_b != null ? String(p.supertiebreak_b) : ''
+        );
+        if (g === 'a') return p.equipo_a_id || null;
+        if (g === 'b') return p.equipo_b_id || null;
+        return null;
+    };
+
+    const fixContainer = async (basePath, isJornadas) => {
+        const containers = await getDocs(collection(db, basePath));
+        for (const cd of containers.docs) {
+            const snap = await getDocs(collection(db, basePath, cd.id, 'partidos'));
+            const partidos = [];
+            for (const pd of snap.docs) {
+                const p = pd.data();
+                const correcto = computeWinnerId(p);
+                if (correcto && p.ganador_equipo_id !== correcto) {
+                    await updateDoc(doc(db, basePath, cd.id, 'partidos', pd.id), { ganador_equipo_id: correcto });
+                    p.ganador_equipo_id = correcto;
+                    fixedCount++;
+                }
+                partidos.push(p);
+            }
+            if (!isJornadas) {
+                const data = cd.data();
+                if (data.ganador_equipo_id) {
+                    let aWins = 0, bWins = 0;
+                    partidos.forEach(p => {
+                        if (p.estado === 'finalizado') {
+                            if (p.ganador_equipo_id === data.equipo_a_id) aWins++;
+                            else if (p.ganador_equipo_id === data.equipo_b_id) bWins++;
+                        }
+                    });
+                    if (partidos.length > 0 && aWins !== bWins) {
+                        const ganador = aWins > bWins ? data.equipo_a_id : data.equipo_b_id;
+                        if (data.ganador_equipo_id !== ganador) {
+                            await updateDoc(doc(db, basePath, cd.id), { ganador_equipo_id: ganador });
+                            fixedCount++;
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    try {
+        await fixContainer('torneos/' + tid + '/jornadas', true);
+        await fixContainer('torneos/' + tid + '/semifinales', false);
+        await fixContainer('torneos/' + tid + '/finales', false);
+        if (fixedCount > 0) {
+            invalidatePartidosCache();
+            console.log('[admin] autoFixGanadores: ' + fixedCount + ' ganador(es) corregido(s)');
+        }
+    } catch (e) {
+        console.error('[admin] autoFixGanadores error:', e);
+    }
+}
 
 // ── Firestore Helpers ──
 function resPartidoCol(jornadaId) {

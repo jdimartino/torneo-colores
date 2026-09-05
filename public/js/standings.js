@@ -1,5 +1,6 @@
 // ── Standings Calculation ──
 // Single source of truth: always derived from partidos finalizados
+import { deriveGanadorId } from './utils.js';
 
 export function calculateStandings(equipos, allEnfrentamientos) {
     const stats = {};
@@ -35,7 +36,7 @@ export function calculateStandings(equipos, allEnfrentamientos) {
 
         let aWins = 0, bWins = 0;
         finalizados.forEach(p => {
-            const g = p.ganador_equipo_id;
+            const g = deriveGanadorId(p);
             const pJuegos = parseInt(p.games_a) || 0;
             const pJuegosVis = parseInt(p.games_b) || 0;
             stats[aId].partidos_jugados++;

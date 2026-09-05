@@ -61,3 +61,33 @@ export function formatCategoria(cat) {
     if (/^Mixto\s+/i.test(s)) return generar('Mixto', s.replace(/^Mixto/i, ''));
     return s.toUpperCase();
 }
+
+// Deriva el ganador de un partido finalizado desde los scores (fuente de verdad).
+// Fallback al ganador guardado si faltan scores o el partido no está finalizado.
+export function deriveGanadorId(p) {
+    if (!p) return null;
+    if (p.estado !== 'finalizado') return p.ganador_equipo_id || null;
+    if (p.set1_a == null || p.set1_b == null || p.set2_a == null || p.set2_b == null) {
+        return p.ganador_equipo_id || null;
+    }
+    const winner = (a, b) => (a > b ? 'a' : b > a ? 'b' : null);
+    const set1 = (p.set1_a === 4 && p.set1_b === 4)
+        ? (p.tiebreak1_a != null && p.tiebreak1_b != null ? winner(p.tiebreak1_a, p.tiebreak1_b) : null)
+        : winner(p.set1_a, p.set1_b);
+    const set2 = (p.set2_a === 4 && p.set2_b === 4)
+        ? (p.tiebreak2_a != null && p.tiebreak2_b != null ? winner(p.tiebreak2_a, p.tiebreak2_b) : null)
+        : winner(p.set2_a, p.set2_b);
+    let setsA = 0, setsB = 0;
+    if (set1 === 'a') setsA++; else if (set1 === 'b') setsB++;
+    if (set2 === 'a') setsA++; else if (set2 === 'b') setsB++;
+    let side = null;
+    if (setsA === 2) side = 'a';
+    else if (setsB === 2) side = 'b';
+    else if (p.supertiebreak_a != null && p.supertiebreak_b != null) {
+        if (p.supertiebreak_a > p.supertiebreak_b) side = 'a';
+        else if (p.supertiebreak_b > p.supertiebreak_a) side = 'b';
+    }
+    if (!side) return p.ganador_equipo_id || null;
+    const id = side === 'a' ? p.equipo_a_id : p.equipo_b_id;
+    return id || p.ganador_equipo_id || null;
+}

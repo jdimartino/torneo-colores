@@ -2,7 +2,7 @@ import { getDocs, getDoc, doc, collection, onSnapshot } from 'https://www.gstati
 import { db } from './firebasePublic.js';
 import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
-import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers } from './utils.js';
+import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers, deriveGanadorId } from './utils.js';
 
 let allJugadores = [];
 let allEquipos = [];
@@ -143,7 +143,7 @@ if (typeof window !== 'undefined') {
         equipos: () => allEquipos,
         jornadas: () => allJornadas,
         loadAllData: reloadAllData,
-        reloadEquipos: () => renderEquipos(),
+        reloadPosiciones: () => renderPosiciones(),
         get tournamentId() { return getActiveTournamentId(); },
         get dataLoaded() { return _dataLoaded; }
     };
@@ -371,9 +371,9 @@ function _attachFinsLive() {
 
 function _syncLive(tabId) {
     const want = new Set();
-    if (tabId === 'posiciones' || tabId === 'resultados' || tabId === 'equipos') want.add('rr');
-    if (tabId === 'semifinales' || tabId === 'final' || tabId === 'equipos') want.add('semis');
-    if (tabId === 'final' || tabId === 'equipos') want.add('fins');
+    if (tabId === 'posiciones' || tabId === 'resultados') want.add('rr');
+    if (tabId === 'posiciones' || tabId === 'semifinales' || tabId === 'final') want.add('semis');
+    if (tabId === 'posiciones' || tabId === 'final') want.add('fins');
     ['rr', 'semis', 'fins'].forEach(k => { if (!want.has(k)) _detachLive(k); });
     if (want.has('rr')) _attachRRLive();
     if (want.has('semis')) _attachSemisLive();
@@ -389,11 +389,10 @@ function schedulePublicRender() {
         _renderQueued = false;
         const t = _currentTab;
         try {
-            if (t === 'posiciones' && _loaded.partidos) renderPosiciones();
+            if (t === 'posiciones' && _loaded.partidos && _loaded.jugadores) renderPosiciones();
             else if (t === 'resultados' && _loaded.partidos && _loaded.jugadores) renderResultados();
             else if (t === 'semifinales' && _loaded.semis) renderSemifinalesPublic();
             else if (t === 'final' && _loaded.fins) renderFinalPublic();
-            else if (t === 'equipos' && _loaded.partidos && _loaded.jugadores && _loaded.semis && _loaded.fins) renderEquipos();
         } catch (e) {
             console.error('Error en render programado:', e);
         }
@@ -449,60 +448,56 @@ function renderPosiciones() {
         '</div>' +
         '</div>';
 
-    // Header de stats
-    html += '<div class="card" style="margin-bottom:0.5rem;padding:0.5rem 0.75rem;">' +
-        '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">' +
-        '<div style="min-width:1.5rem;"></div>' +
-        '<div style="flex:1;"></div>' +
-        '<div style="display:flex;gap:0.5rem;">' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">JJ</span></div>' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">JG</span></div>' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PJ</span></div>' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PG</span></div>' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--on-surface-variant-40);">PP</span></div>' +
-        '<div style="min-width:2.2rem;text-align:center;"><span style="font-size:0.6rem;font-weight:600;color:var(--primary);">PTS</span></div>' +
+    // Header de stats (columnas alineadas con las filas via .pos-table)
+    html += '<div class="card pos-table pos-head">' +
+        '<div class="pos-row">' +
+        '<div class="pos-num"></div>' +
+        '<div style="flex:1;min-width:0;"></div>' +
+        '<div class="pos-stats">' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--on-surface-variant-40);">JJ</span></div>' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--primary);">JG</span></div>' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--on-surface-variant-40);">PJ</span></div>' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--secondary);">PG</span></div>' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--on-surface-variant-40);">PP</span></div>' +
+        '<div class="pos-stat"><span class="pos-head-label" style="color:var(--primary);">PTS</span></div>' +
         '</div>' +
+        '<div class="pos-chev-spacer"></div>' +
         '</div>' +
         '</div>';
 
-    // Standings cards
+    // Standings cards (drill-down igual que en Estadísticas)
     standings.forEach((s, i) => {
         const isQualified = i < 4;
         const qualBorder = isQualified ? 'border-left:4px solid ' + s.color + ';' : 'border-left:4px solid var(--white-8);';
-        const qualBg = isQualified ? 'background:rgba(255,255,255,0.03);' : '';
+        const eq = allEquipos.find(e => e.id === s.id);
+        const isOpen = _openEquipoId === s.id;
+        const jugadoresHtml = eq ? _renderJugadoresDeEquipoHtml(eq) : '<div class="sin-partidos">Sin jugadores asignados</div>';
 
-        html += '<div class="card" style="' + qualBorder + qualBg + 'margin-bottom:0.5rem;">' +
-            '<div style="display:flex;align-items:center;gap:0.5rem;">' +
-            '<div style="min-width:1.5rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
+        html += '<div class="card-equipos pos-standings pos-table' + (isQualified ? ' q-clas' : '') + (isOpen ? ' open' : '') + '" data-eq-id="' + s.id + '" style="' + qualBorder + '">' +
+            '<div class="equipo-header">' +
+                '<div class="pos-row">' +
+                    '<div class="pos-num">' +
+                        '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:' + (isQualified ? s.color : 'var(--on-surface-variant-40)') + ';">' + s.posicion + 'º</div>' +
+                    '</div>' +
+                    '<div style="flex:1;display:flex;align-items:center;gap:0.4rem;min-width:0;">' +
+                        '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>' +
+                        '<span style="font-family:Lexend;font-weight:600;font-size:0.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.nombre) + '</span>' +
+                    '</div>' +
+                    '<div class="pos-stats">' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.jornadas_disputadas + '</div></div>' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--primary);">' + s.jornadas_ganadas + '</div></div>' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_jugados + '</div></div>' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + s.partidos_ganados + '</div></div>' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_perdidos + '</div></div>' +
+                        '<div class="pos-stat"><div style="font-family:Lexend;font-weight:800;font-size:1rem;color:var(--primary);">' + s.puntos + '</div></div>' +
+                    '</div>' +
+                    '<span class="material-symbols-outlined chev">expand_more</span>' +
+                '</div>' +
+                (isQualified ? '<div class="pos-clasif"><span class="material-symbols-outlined" style="font-size:0.55rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '') +
+                '<span class="equipo-hint">Clic para detalles</span>' +
             '</div>' +
-            '<div style="flex:1;display:flex;align-items:center;gap:0.4rem;min-width:0;">' +
-            '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.nombre) + '</span>' +
-            '</div>' +
-            '<div style="display:flex;gap:0.5rem;">' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.jornadas_disputadas + '</div>' +
-            '</div>' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--primary);">' + s.jornadas_ganadas + '</div>' +
-            '</div>' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_jugados + '</div>' +
-            '</div>' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + s.partidos_ganados + '</div>' +
-            '</div>' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:700;font-size:0.9rem;">' + s.partidos_perdidos + '</div>' +
-            '</div>' +
-            '<div style="min-width:2.2rem;text-align:center;">' +
-            '<div style="font-family:Lexend;font-weight:800;font-size:1rem;color:var(--primary);">' + s.puntos + '</div>' +
-            '</div>' +
-            '</div>' +
-            '</div>' +
-            (isQualified ? '<div style="font-size:0.6rem;color:var(--secondary);font-weight:600;margin-top:0.2rem;padding-top:0.2rem;border-top:1px solid var(--white-5);"><span class="material-symbols-outlined" style="font-size:0.55rem;vertical-align:middle;">emoji_events</span> CLASIFICADO</div>' : '') +
-            '</div>';
+            '<div class="equipo-body">' + jugadoresHtml + '</div>' +
+        '</div>';
     });
 
     // Semifinal preview
@@ -553,6 +548,9 @@ function renderPosiciones() {
         '</div>';
 
     el.innerHTML = html;
+
+    // Toggles incrementales para el drill-down de posiciones
+    _bindDrilldownToggles(el);
 }
 
 // ── renderPartidoCard helper (reutilizado en Resultados, Semifinales y Final) ──
@@ -580,7 +578,7 @@ function renderPartidoCard(p, faseLabel, aColorOverride, bColorOverride, fechaSt
     headerParts.push('<span class="res-meta-jornada">' + esc(faseLabel) + '</span>');
     headerParts.push('<span class="res-meta-category">' + esc(catLabel) + '</span>');
 
-    const ganadorId = p.ganador_equipo_id;
+    const ganadorId = deriveGanadorId(p);
     const ganadorNombre = ganadorId === p.equipo_a_id
         ? (p.equipo_a_nombre || getTeamName(p.equipo_a_id))
         : (ganadorId === p.equipo_b_id ? (p.equipo_b_nombre || getTeamName(p.equipo_b_id)) : null);
@@ -719,9 +717,6 @@ function renderInicio() {
                 <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">groups</span> Acceso Rápido
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
-                <button class="btn btn-outline" onclick="showTab('equipos')">
-                    <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">groups</span> Ver Equipos
-                </button>
                 <button class="btn btn-outline" onclick="showTab('posiciones')">
                     <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;">leaderboard</span> Posiciones
                 </button>
@@ -799,9 +794,10 @@ function _renderJugadorPartidos(jugId, equipoId) {
 
         let resultClass = 'pending';
         let resultText = 'Pendiente';
-        if (p.ganador_equipo_id) {
-            resultClass = p.ganador_equipo_id === miEquipoId ? 'win' : 'lose';
-            resultText = p.ganador_equipo_id === miEquipoId ? 'Ganado' : 'Perdido';
+        const gId = deriveGanadorId(p);
+        if (gId) {
+            resultClass = gId === miEquipoId ? 'win' : 'lose';
+            resultText = gId === miEquipoId ? 'Ganado' : 'Perdido';
         }
 
         const scoreParts = [];
@@ -834,67 +830,43 @@ function _jugadorNombreBasico(jugId) {
     return j ? esc(shortName(j)) : '';
 }
 
-function renderEquipos() {
-    const el = document.getElementById('equipos');
-    if (!allEquipos.length) {
-        el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>Aún no hay equipos configurados</p></div>';
-        return;
-    }
-    let html = '<div class="equipos-list">';
-    allEquipos.forEach(eq => {
-        if (!eq.activo) return;
-        const CAT_ORDER = ['3ra', '4ta', '5ta', '6ta Libre', '6ta Master', '7ma'];
-        const jugadoresEq = allJugadores
-            .filter(j => j.equipo_id === eq.id)
-            .sort((a, b) => {
-                const orderA = CAT_ORDER.indexOf(a.categoria || '');
-                const orderB = CAT_ORDER.indexOf(b.categoria || '');
-                const catA = orderA === -1 ? 999 : orderA;
-                const catB = orderB === -1 ? 999 : orderB;
-                if (catA !== catB) return catA - catB;
-                const nA = ((a.nombre || '') + ' ' + (a.apellidos || '')).toLowerCase();
-                const nB = ((b.nombre || '') + ' ' + (b.apellidos || '')).toLowerCase();
-                return nA.localeCompare(nB);
-            });
-        const isOpen = _openEquipoId === eq.id;
-        const jugadoresHtml = jugadoresEq.length
-            ? jugadoresEq.map(j => {
-                const jOpen = _openJugadorId === j.id;
-                const body = jOpen ? _renderJugadorPartidos(j.id, eq.id) : '';
-                return '<div class="jugador-card' + (jOpen ? ' open' : '') + '" data-jug-id="' + j.id + '">' +
-                    '<div class="jugador-header">' +
-                        '<span class="jugador-name">' + esc(shortName(j)) + '</span>' +
-                        '<span class="material-symbols-outlined jugador-chev">expand_more</span>' +
-                    '</div>' +
-                    '<div class="jugador-meta">' +
-                        (j.categoria ? '<span class="badge" style="background:var(--primary-12);color:var(--primary);font-size:0.6rem;">' + esc(j.categoria) + '</span>' : '') +
-                    '</div>' +
-                    '<div class="jugador-body" data-eq-id="' + eq.id + '"' + (jOpen ? ' data-filled="1"' : '') + '>' + body + '</div>' +
-                '</div>';
-            }).join('')
-            : '<div class="sin-partidos">Sin jugadores asignados</div>';
+// ── Helpers de drill-down equipo → jugadores → partidos (Posiciones) ──
+function _getJugadoresDeEquipo(eq) {
+    return allJugadores
+        .filter(j => j.equipo_id === eq.id)
+        .sort((a, b) => {
+            const nA = ((a.nombre || '') + ' ' + (a.apellidos || '')).toLowerCase();
+            const nB = ((b.nombre || '') + ' ' + (b.apellidos || '')).toLowerCase();
+            return nA.localeCompare(nB);
+        });
+}
 
-        html += '<div class="card-equipos' + (isOpen ? ' open' : '') + '" data-eq-id="' + eq.id + '">' +
-            '<div class="equipo-header">' +
-                '<span class="equipo-dot" style="background:' + esc(eq.color || '#888') + ';"></span>' +
-                '<span class="equipo-title">' + esc(eq.nombre) + '</span>' +
-                '<span class="equipo-count">' + jugadoresEq.length + '</span>' +
-                '<span class="material-symbols-outlined chev">expand_more</span>' +
-                '<span class="equipo-hint">Clic para detalles</span>' +
+function _renderJugadoresDeEquipoHtml(eq) {
+    const jugadoresEq = _getJugadoresDeEquipo(eq);
+    if (!jugadoresEq.length) return '<div class="sin-partidos">Sin jugadores asignados</div>';
+    return jugadoresEq.map(j => {
+        const jOpen = _openJugadorId === j.id;
+        const body = jOpen ? _renderJugadorPartidos(j.id, eq.id) : '';
+        return '<div class="jugador-card' + (jOpen ? ' open' : '') + '" data-jug-id="' + j.id + '">' +
+            '<div class="jugador-header">' +
+                '<span class="jugador-name">' + esc(shortName(j)) + '</span>' +
+                '<span class="material-symbols-outlined jugador-chev">expand_more</span>' +
             '</div>' +
-            '<div class="equipo-body">' + jugadoresHtml + '</div>' +
+            '<div class="jugador-meta">' +
+                (j.categoria ? '<span class="badge" style="background:var(--primary-12);color:var(--primary);font-size:0.6rem;">' + esc(j.categoria) + '</span>' : '') +
+            '</div>' +
+            '<div class="jugador-body" data-eq-id="' + eq.id + '"' + (jOpen ? ' data-filled="1"' : '') + '>' + body + '</div>' +
         '</div>';
-    });
-    html += '</div>';
-    el.innerHTML = html || '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>No hay equipos activos</p></div>';
+    }).join('');
+}
 
-    // Toggles incrementales: no re-renderizar toda la lista al expandir
-    el.querySelectorAll('.card-equipos > .equipo-header').forEach(header => {
+function _bindDrilldownToggles(scopeEl) {
+    scopeEl.querySelectorAll('.card-equipos > .equipo-header').forEach(header => {
         header.addEventListener('click', () => {
             const card = header.parentElement;
             const id = card.dataset.eqId;
             const opening = !card.classList.contains('open');
-            el.querySelectorAll('.card-equipos.open').forEach(c => {
+            scopeEl.querySelectorAll('.card-equipos.open').forEach(c => {
                 if (c !== card) {
                     c.classList.remove('open');
                     c.querySelectorAll('.jugador-card.open').forEach(jc => jc.classList.remove('open'));
@@ -912,7 +884,7 @@ function renderEquipos() {
         });
     });
 
-    el.querySelectorAll('.card-equipos .jugador-card > .jugador-header').forEach(header => {
+    scopeEl.querySelectorAll('.card-equipos .jugador-card > .jugador-header').forEach(header => {
         header.addEventListener('click', (e) => {
             e.stopPropagation();
             const card = header.parentElement;
@@ -920,7 +892,7 @@ function renderEquipos() {
             const body = card.querySelector('.jugador-body');
             const equipoId = body ? body.dataset.eqId : null;
             const opening = !card.classList.contains('open');
-            const list = card.closest('.equipos-list');
+            const list = card.closest('.equipo-body');
             if (list) list.querySelectorAll('.jugador-card.open').forEach(c => { if (c !== card) c.classList.remove('open'); });
             if (opening) {
                 card.classList.add('open');
@@ -958,19 +930,17 @@ async function _renderTab(tabId) {
     }
 
     let ready;
-    if (tabId === 'posiciones') ready = ensurePartidos();
+    if (tabId === 'posiciones') ready = Promise.all([ensureJugadores(), ensurePartidos(), ensureSemis(), ensureFins()]);
     else if (tabId === 'resultados') ready = Promise.all([ensureJugadores(), ensurePartidos()]);
     else if (tabId === 'semifinales') ready = ensureSemis();
     else if (tabId === 'final') ready = Promise.all([ensureSemis(), ensureFins()]);
-    else if (tabId === 'equipos') ready = Promise.all([ensureJugadores(), ensurePartidos(), ensureSemis(), ensureFins()]);
     else ready = Promise.resolve();
 
     const dataReady =
-        tabId === 'posiciones' ? _loaded.partidos :
+        tabId === 'posiciones' ? (_loaded.partidos && _loaded.jugadores) :
         tabId === 'resultados' ? (_loaded.partidos && _loaded.jugadores) :
         tabId === 'semifinales' ? _loaded.semis :
-        tabId === 'final' ? (_loaded.fins && _loaded.semis) :
-        tabId === 'equipos' ? (_loaded.jugadores && _loaded.partidos && _loaded.semis && _loaded.fins) : true;
+        tabId === 'final' ? (_loaded.fins && _loaded.semis) : true;
     if (!dataReady && content) content.innerHTML = loadingHTML;
 
     try {
@@ -988,7 +958,6 @@ async function _renderTab(tabId) {
     else if (tabId === 'resultados') renderResultados();
     else if (tabId === 'semifinales') renderSemifinalesPublic();
     else if (tabId === 'final') renderFinalPublic();
-    else if (tabId === 'equipos') renderEquipos();
     _syncLive(tabId);
 }
 
@@ -997,9 +966,16 @@ window.showTab = function(tabId) {
     _renderTab(tabId);
 };
 
+const VALID_TABS = ['posiciones', 'resultados', 'semifinales', 'final', 'inicio'];
+
+function _sanitizeTab(tab) {
+    if (tab === 'equipos') return 'posiciones';
+    return VALID_TABS.includes(tab) ? tab : 'posiciones';
+}
+
 window.addEventListener('popstate', () => {
     const tab = (history.state && history.state.tab) || location.hash.replace('#', '') || 'posiciones';
-    _renderTab(tab);
+    _renderTab(_sanitizeTab(tab));
 });
 
 // ── Public Tournament Selector ──
@@ -1056,11 +1032,7 @@ function initPublicTournamentSelector() {
 // ── Initial Load ──
 async function init() {
     try {
-        const validTabs = ['posiciones', 'equipos', 'resultados', 'semifinales', 'final', 'inicio'];
-        let initialTab = location.hash.replace('#', '');
-        if (!validTabs.includes(initialTab)) {
-            initialTab = 'posiciones';
-        }
+        const initialTab = _sanitizeTab(location.hash.replace('#', ''));
         history.replaceState({ tab: initialTab }, '', '#' + initialTab);
         _renderTab(initialTab);
         await ensureBase();
@@ -1091,8 +1063,9 @@ function renderSemifinalesPublic() {
 
         let aWins = 0, bWins = 0;
         semi.partidos.forEach(p => {
-            if (p.ganador_equipo_id === semi.equipo_a_id) aWins++;
-            else if (p.ganador_equipo_id === semi.equipo_b_id) bWins++;
+            const g = deriveGanadorId(p);
+            if (g === semi.equipo_a_id) aWins++;
+            else if (g === semi.equipo_b_id) bWins++;
         });
 
         const ganadorId = semi.ganador_equipo_id;
@@ -1160,8 +1133,9 @@ function renderFinalPublic() {
 
         let aWins = 0, bWins = 0;
         fin.partidos.forEach(p => {
-            if (p.ganador_equipo_id === fin.equipo_a_id) aWins++;
-            else if (p.ganador_equipo_id === fin.equipo_b_id) bWins++;
+            const g = deriveGanadorId(p);
+            if (g === fin.equipo_a_id) aWins++;
+            else if (g === fin.equipo_b_id) bWins++;
         });
 
         const campeon = fin.ganador_equipo_id === fin.equipo_a_id ? fin.equipo_a_nombre :

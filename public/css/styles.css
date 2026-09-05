@@ -1988,8 +1988,10 @@ td.col-player { text-align: left; }
 /* Color por unidad ganada/perdida (set · tie · super tie) */
 .res-set {
   display: inline-block;
-  min-width: 1.5rem;
+  min-width: 2ch;
   text-align: center;
+  letter-spacing: normal;
+  font-variant-numeric: tabular-nums;
   margin: 0;
 }
 .res-set-win {
@@ -3055,7 +3057,6 @@ td.col-player { text-align: left; }
 /* ═══════════════════════════════════════════
    EQUIPO/JUGADOR DRILL-DOWN (PUBLIC)
    ═══════════════════════════════════════════ */
-.equipos-list { display: flex; flex-direction: column; gap: 0.5rem; }
 
 .card-equipos {
   background: var(--surface);
@@ -3137,6 +3138,90 @@ td.col-player { text-align: left; }
 
 .jugador-card .jugador-body { display: none; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--white-10); }
 .jugador-card.open .jugador-body { display: block; }
+
+/* ── Posiciones con drill-down (public) ── */
+/* Sistema de columnas compartido por el encabezado JJ/PTS y las filas */
+.pos-table {
+  --pos-num: 1.5rem;
+  --pos-col: 2.2rem;
+  --pos-gap: 0.5rem;
+  --pos-chev: 1.1rem;
+}
+.pos-table .pos-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pos-gap);
+  flex: 1;
+  min-width: 0;
+}
+.pos-table .pos-num {
+  min-width: var(--pos-num);
+  text-align: center;
+  flex-shrink: 0;
+}
+.pos-table .pos-stats {
+  display: flex;
+  gap: var(--pos-gap);
+}
+.pos-table .pos-stat {
+  min-width: var(--pos-col);
+  text-align: center;
+}
+.pos-table .pos-chev-spacer {
+  min-width: var(--pos-chev);
+  flex-shrink: 0;
+}
+.pos-head {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-left: 4px solid var(--white-8);
+}
+.pos-head-label { font-size: 0.6rem; font-weight: 600; }
+
+.card-equipos.pos-standings { margin-bottom: 0.5rem; }
+.card-equipos.pos-standings.q-clas { background: rgba(255, 255, 255, 0.03); }
+.card-equipos.pos-standings:hover,
+.card-equipos.pos-standings.q-clas:hover,
+.card-equipos.pos-standings.open,
+.card-equipos.pos-standings.q-clas.open { background: var(--surface-high); }
+
+.card-equipos.pos-standings .equipo-header {
+  padding: 0.7rem 0.75rem;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.card-equipos.pos-standings .pos-clasif {
+  width: 100%;
+  font-size: 0.6rem;
+  color: var(--secondary);
+  font-weight: 600;
+  margin-top: 0.2rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--white-5);
+}
+.card-equipos.pos-standings .chev {
+  font-size: var(--pos-chev);
+  min-width: var(--pos-chev);
+  text-align: center;
+  flex-shrink: 0;
+}
+.card-equipos.pos-standings .equipo-header .equipo-hint {
+  font-size: 0.72rem;
+  margin-top: 0.35rem;
+}
+
+@media (max-width: 480px) {
+  .pos-table { --pos-col: 1.9rem; --pos-num: 1.4rem; --pos-gap: 0.35rem; --pos-chev: 1rem; }
+}
+@media (max-width: 400px) {
+  .pos-table { --pos-col: 1.75rem; --pos-num: 1.3rem; --pos-gap: 0.3rem; --pos-chev: 0.95rem; }
+  .card-equipos.pos-standings .equipo-header { padding: 0.65rem 0.75rem; }
+}
+@media (max-width: 350px) {
+  .pos-table { --pos-col: 1.55rem; --pos-num: 1.2rem; --pos-gap: 0.25rem; --pos-chev: 0.85rem; }
+  .card-equipos.pos-standings .equipo-header,
+  .pos-head { padding-left: 0.6rem; padding-right: 0.6rem; }
+}
 
 .partidos-list { display: flex; flex-direction: column; gap: 0.3rem; }
 
