@@ -586,16 +586,25 @@ function renderPartidoCard(p, faseLabel, aColorOverride, bColorOverride, fechaSt
         : (ganadorId === p.equipo_b_id ? (p.equipo_b_nombre || getTeamName(p.equipo_b_id)) : null);
     const ganadorColor = ganadorId === p.equipo_a_id ? aColor : bColor;
 
+    const teamA = p.equipo_a_nombre || '';
+    const teamB = p.equipo_b_nombre || '';
+
     return '<div class="res-public-card' + (live ? ' res-public-card-live' : '') + '">' +
         '<div class="res-public-header">' + headerParts.join(' · ') + liveBadge + '</div>' +
         '<div class="res-public-player">' +
         '<div class="res-public-dot" style="background:' + aColor + ';"></div>' +
-        '<div><div class="res-public-name">' + esc(aNames) + '</div></div>' +
+        '<div>' +
+        (teamA ? '<div class="res-public-team">' + esc(teamA) + '</div>' : '') +
+        '<div class="res-public-name">' + esc(aNames) + '</div>' +
+        '</div>' +
         '<div class="res-public-score">' + renderScoreTokens(scores.a) + '</div>' +
         '</div>' +
         '<div class="res-public-player">' +
         '<div class="res-public-dot" style="background:' + bColor + ';"></div>' +
-        '<div><div class="res-public-name">' + esc(bNames) + '</div></div>' +
+        '<div>' +
+        (teamB ? '<div class="res-public-team">' + esc(teamB) + '</div>' : '') +
+        '<div class="res-public-name">' + esc(bNames) + '</div>' +
+        '</div>' +
         '<div class="res-public-score">' + renderScoreTokens(scores.b) + '</div>' +
         '</div>' +
         (ganadorNombre
@@ -753,9 +762,6 @@ function _partidosDelJugador(jugId) {
             add(p, 'roundRobin', f._jornadaId, f._jornadaNumero, f._jornadaFecha);
         });
     });
-    allPartidosEliminatoria.forEach(p => {
-        add(p, 'partido', p._jornadaId, p._jornadaNumero, p._jornadaFecha);
-    });
     allSemifinales.forEach(s => {
         const ids = [s.jugador_a_1_id, s.jugador_a_2_id, s.jugador_b_1_id, s.jugador_b_2_id].filter(Boolean);
         if (ids.includes(jugId)) partidos.push({ p: s, fuente: 'semifinal', jornadaId: null, jornadaNum: null, jornadaFecha: null });
@@ -837,7 +843,19 @@ function renderEquipos() {
     let html = '<div class="equipos-list">';
     allEquipos.forEach(eq => {
         if (!eq.activo) return;
-        const jugadoresEq = allJugadores.filter(j => j.equipo_id === eq.id);
+        const CAT_ORDER = ['3ra', '4ta', '5ta', '6ta Libre', '6ta Master', '7ma'];
+        const jugadoresEq = allJugadores
+            .filter(j => j.equipo_id === eq.id)
+            .sort((a, b) => {
+                const orderA = CAT_ORDER.indexOf(a.categoria || '');
+                const orderB = CAT_ORDER.indexOf(b.categoria || '');
+                const catA = orderA === -1 ? 999 : orderA;
+                const catB = orderB === -1 ? 999 : orderB;
+                if (catA !== catB) return catA - catB;
+                const nA = ((a.nombre || '') + ' ' + (a.apellidos || '')).toLowerCase();
+                const nB = ((b.nombre || '') + ' ' + (b.apellidos || '')).toLowerCase();
+                return nA.localeCompare(nB);
+            });
         const isOpen = _openEquipoId === eq.id;
         const jugadoresHtml = jugadoresEq.length
             ? jugadoresEq.map(j => {
