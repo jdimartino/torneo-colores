@@ -1,6 +1,6 @@
 // ── Standings Calculation ──
 // Single source of truth: always derived from partidos finalizados
-import { deriveGanadorId } from './utils.js';
+import { deriveGanadorId } from './utils.js?v=39';
 
 export function calculateStandings(equipos, allEnfrentamientos) {
     const stats = {};

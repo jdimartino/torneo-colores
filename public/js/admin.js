@@ -294,7 +294,22 @@ async function existeIngresoInscripcion(jugadorId) {
 
 async function crearIngresoInscripcion(jugador) {
     const isSocio = (jugador.status_socio || '').trim() === 'Socio';
-    const monto = isSocio ? MONTO_SOCIO : MONTO_INVITADO;
+    const montoDefault = isSocio ? MONTO_SOCIO : MONTO_INVITADO;
+    const metodo = (jugador.metodo_pago || '').trim();
+    let moneda = 'EUR';
+    let monto = montoDefault;
+    if (metodo === 'Pago Móvil') {
+        moneda = 'Bs';
+        monto = parseFloat(jugador.monto) || montoDefault;
+    } else if (metodo === 'Efectivo Dólares') {
+        moneda = 'USD';
+        monto = parseFloat(jugador.monto_usd) || montoDefault;
+    } else if (metodo === 'Otro') {
+        if (jugador.monto_usd && parseFloat(jugador.monto_usd) > 0) {
+            moneda = 'USD';
+            monto = parseFloat(jugador.monto_usd);
+        }
+    }
     const nombre = (jugador.nombre || '') + ' ' + (jugador.apellidos || '');
     const ahora = new Date();
     const mov = {
@@ -302,7 +317,7 @@ async function crearIngresoInscripcion(jugador) {
         fecha: ahora,
         concepto: 'Inscripción - ' + nombre.trim(),
         monto: monto,
-        moneda: 'EUR',
+        moneda: moneda,
         observacion: '',
         jugadorId: jugador.id,
         jugadorNombre: nombre.trim(),
@@ -322,20 +337,62 @@ async function syncInscripcionIngreso(jugadorId) {
     await crearIngresoInscripcion(jug);
 }
 
+function getMonedaMontoInscripcion(jugador) {
+    const isSocio = (jugador.status_socio || '').trim() === 'Socio';
+    const montoDefault = isSocio ? MONTO_SOCIO : MONTO_INVITADO;
+    const metodo = (jugador.metodo_pago || '').trim();
+    let moneda = 'EUR';
+    let monto = montoDefault;
+    if (metodo === 'Pago Móvil') {
+        moneda = 'Bs';
+        monto = parseFloat(jugador.monto) || montoDefault;
+    } else if (metodo === 'Efectivo Dólares') {
+        moneda = 'USD';
+        monto = parseFloat(jugador.monto_usd) || montoDefault;
+    } else if (metodo === 'Otro') {
+        if (jugador.monto_usd && parseFloat(jugador.monto_usd) > 0) {
+            moneda = 'USD';
+            monto = parseFloat(jugador.monto_usd);
+        }
+    }
+    return { moneda, monto };
+}
+
 async function sincronizarInscripciones() {
     showLoading('Sincronizando ingresos de inscripciones...');
     try {
         const snap = await getDocs(query(finanzasCol(), where('tipo', '==', 'ingreso_inscripcion')));
-        const existentes = new Set(snap.docs.map(d => d.data().jugadorId).filter(Boolean));
+        const existentesMap = new Map();
+        snap.docs.forEach(d => {
+            const data = d.data();
+            if (data.jugadorId) existentesMap.set(d.id, data);
+        });
         const pagados = allJugadores.filter(j => j.pago_recibido);
         let creados = 0;
+        let actualizados = 0;
         for (const j of pagados) {
-            if (!existentes.has(j.id)) {
+            const existente = [...existentesMap.entries()].find(([, v]) => v.jugadorId === j.id);
+            const esperado = getMonedaMontoInscripcion(j);
+            if (!existente) {
                 await crearIngresoInscripcion(j);
                 creados++;
+            } else {
+                const [docId, docData] = existente;
+                const monedaActual = docData.moneda || 'EUR';
+                const montoActual = parseFloat(docData.monto) || 0;
+                if (monedaActual !== esperado.moneda || Math.abs(montoActual - esperado.monto) > 0.01) {
+                    await updateDoc(doc(finanzasCol(), docId), {
+                        moneda: esperado.moneda,
+                        monto: esperado.monto
+                    });
+                    actualizados++;
+                }
             }
         }
-        toast(creados > 0 ? (creados + ' ingresos creados') : 'No hay ingresos nuevos', 'success');
+        const partes = [];
+        if (creados > 0) partes.push(creados + ' creados');
+        if (actualizados > 0) partes.push(actualizados + ' actualizados');
+        toast(partes.length > 0 ? partes.join(', ') : 'Todo sincronizado', 'success');
     } catch (e) {
         toast('Error al sincronizar', 'error');
         console.error(e);
@@ -759,12 +816,16 @@ function renderFinanceResumen(movimientos) {
         return '<div class="finance-summary-new"><div class="finance-section"><div class="fsc-empty">Sin movimientos</div></div></div>';
     }
 
-    // Calculate inscription income (always in EUR)
+    // Calculate inscription income by currency
     const inscEur = movimientos
         .filter(m => m.tipo === 'ingreso_inscripcion' && m.moneda === 'EUR')
         .reduce((sum, m) => sum + m.monto, 0);
-
-    const inscBse = inscEur * (_tasas.eur_ves || 0);
+    const inscUsd = movimientos
+        .filter(m => m.tipo === 'ingreso_inscripcion' && m.moneda === 'USD')
+        .reduce((sum, m) => sum + m.monto, 0);
+    const inscBs = movimientos
+        .filter(m => m.tipo === 'ingreso_inscripcion' && m.moneda === 'Bs')
+        .reduce((sum, m) => sum + m.monto, 0);
 
     // Calculate other income items
     const otrosMov = movimientos.filter(m => m.tipo === 'otro_ingreso');
@@ -795,8 +856,20 @@ function renderFinanceResumen(movimientos) {
     // Inscription section
     html += '<div class="finance-section">';
     html += '<div class="fs-header"><span class="fs-icon material-symbols-outlined">how_to_reg</span><span class="fs-title">Ingresos por Inscripción</span></div>';
-    html += `<div class="fs-row"><span class="fs-label">Total (EUR)</span><span class="fs-value ingreso">${formatMonto(inscEur, 'EUR')}</span></div>`;
-    html += `<div class="fs-row"><span class="fs-label">Equivalente Bs</span><span class="fs-value equiv">${formatBs(inscBse)}</span></div>`;
+    if (inscEur > 0) {
+        const eqBs = getEquivalenteBs(inscEur, 'EUR');
+        html += `<div class="fs-row"><span class="fs-label">EUR</span><span class="fs-value ingreso">${formatMonto(inscEur, 'EUR')}${eqBs ? ' <span style="font-size:0.72rem;opacity:0.6;">≈ ' + eqBs + '</span>' : ''}</span></div>`;
+    }
+    if (inscUsd > 0) {
+        const eqBs = getEquivalenteBs(inscUsd, 'USD');
+        html += `<div class="fs-row"><span class="fs-label">USD</span><span class="fs-value ingreso">${formatMonto(inscUsd, 'USD')}${eqBs ? ' <span style="font-size:0.72rem;opacity:0.6;">≈ ' + eqBs + '</span>' : ''}</span></div>`;
+    }
+    if (inscBs > 0) {
+        html += `<div class="fs-row"><span class="fs-label">Bs</span><span class="fs-value ingreso">${formatMonto(inscBs, 'Bs')}</span></div>`;
+    }
+    if (inscEur === 0 && inscUsd === 0 && inscBs === 0) {
+        html += '<div class="fs-row"><span class="fs-label fs-muted">Sin inscripciones cobradas</span><span class="fs-value fs-muted">—</span></div>';
+    }
     html += '</div>';
 
     // Other income section
@@ -1478,7 +1551,8 @@ document.getElementById('login-btn').addEventListener('click', async () => {
             'auth/wrong-password': 'Contraseña incorrecta',
             'auth/too-many-requests': 'Demasiados intentos. Esperá unos minutos',
             'auth/network-request-failed': 'Error de conexión',
-            'auth/invalid-email': 'Email inválido'
+            'auth/invalid-email': 'Email inválido',
+            'auth/unauthorized-domain': 'Dominio no autorizado. Contactá al administrador.'
         };
         errDiv.textContent = msgs[e.code] || e.message;
         errDiv.style.display = 'block';
@@ -4049,6 +4123,27 @@ async function renderResEnCurso(panel) {
 
     let html = '';
     html += resViewSwitchHtml(openCount);
+
+    // Recordatorio: jornadas con todos sus partidos finalizados pero sin cerrar (bono +5 pendiente)
+    const porCerrar = groups.filter(g =>
+        g.j.cerrada !== true &&
+        g.j.equipo_a_id && g.j.equipo_b_id &&
+        g.items.length > 0 &&
+        g.items.every(p => p.estado === 'finalizado')
+    );
+    if (porCerrar.length) {
+        html += '<div class="card" style="border-left:4px solid #ffb300;margin-bottom:0.75rem;">' +
+            '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">' +
+            '<span class="material-symbols-outlined" style="font-size:1.1rem;color:#ffb300;">warning</span>' +
+            '<div style="flex:1;min-width:200px;">' +
+            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">' + porCerrar.length + ' jornada' + (porCerrar.length > 1 ? 's' : '') + ' con todos sus partidos finalizados sin cerrar</div>' +
+            '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);">El bono de +5 pts no se aplica hasta cerrarlas: Jornada ' +
+            porCerrar.map(g => esc(String(g.j.numero))).join(', Jornada ') + '</div>' +
+            '</div>' +
+            '<button class="btn btn-sm btn-primary" id="btn-cerrar-todas-jornadas"><span class="material-symbols-outlined" style="font-size:0.85rem;">lock</span> Cerrar todas</button>' +
+            '</div></div>';
+    }
+
     html += '<input type="text" id="result-search" class="search-input" placeholder="Buscar por nombre de jugador...">';
 
     groups.forEach(g => {
@@ -4110,6 +4205,9 @@ async function renderResEnCurso(panel) {
     bindResPanelEvents(panel);
     panel.querySelectorAll('.card').forEach(c => bindResCardEvents(c, panel));
     panel.querySelectorAll('.res-public-card').forEach(c => bindResCardEvents(c, panel));
+    document.getElementById('btn-cerrar-todas-jornadas')?.addEventListener('click', () => {
+        cerrarJornadasBulk(porCerrar.map(g => g.j));
+    });
 }
 
 async function renderResDetail(panel) {
@@ -5059,6 +5157,29 @@ async function editarJornada(jornadaId) {
     } catch (e) {
         toast('Error al reabrir jornada', 'error');
         console.error(e);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function cerrarJornadasBulk(jornadas) {
+    if (!jornadas || !jornadas.length) return;
+    showLoading('Cerrando ' + jornadas.length + ' jornada(s)...');
+    let ok = 0, err = 0;
+    try {
+        for (const j of jornadas) {
+            try {
+                await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', j.id), { cerrada: true });
+                ok++;
+            } catch (e) {
+                err++;
+                console.error('Error al cerrar jornada ' + j.id, e);
+            }
+        }
+        if (ok) toast(ok + ' jornada(s) cerrada(s) — bono de +5 aplicado al ganador de cada una', 'success');
+        if (err) toast(err + ' jornada(s) con error al cerrar', 'error');
+        await refreshData();
+        renderResultados();
     } finally {
         hideLoading();
     }

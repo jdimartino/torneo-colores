@@ -1,27 +1,27 @@
-const CACHE_NAME = 'torneo-colores-v12';
+const CACHE_NAME = 'torneo-colores-v13';
 
 const PRECACHE_URLS = [
   '/',
   '/index.html',
   '/admin.html',
   '/manifest.json',
-  '/css/styles.css',
+  '/css/styles.css?v=33',
   '/favicon.png',
   '/apple-touch-icon.png',
-  '/js/app.js',
-  '/js/admin.js',
+  '/js/app.js?v=39',
+  '/js/admin.js?v=69',
   '/js/firebase.js',
   '/js/firebasePublic.js',
   '/js/config.js',
   '/js/tournamentRefs.js',
-  '/js/tournament.js',
+  '/js/tournament.js?v=2',
   '/js/standings.js',
   '/js/roundRobin.js',
-  '/js/categorias.js',
+  '/js/categorias.js?v=2',
   '/js/matchStatus.js',
-  '/js/permissions.js',
-  '/js/email.js',
-  '/js/utils.js'
+  '/js/permissions.js?v=2',
+  '/js/email.js?v=3',
+  '/js/utils.js?v=39'
 ];
 
 const FIREBASE_API_HOSTS = [

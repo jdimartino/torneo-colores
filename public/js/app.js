@@ -2,7 +2,7 @@ import { getDocs, getDoc, doc, collection, onSnapshot } from 'https://www.gstati
 import { db } from './firebasePublic.js';
 import { loadTournamentConfig, col, getActiveTournamentId, getActiveTournament, getActiveTournamentIds, setSelectedTournament, setActiveTournament, getBracketConfig } from './tournamentRefs.js';
 import { calculateStandings } from './standings.js';
-import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers, deriveGanadorId } from './utils.js';
+import { esc, shortName, formatDate, formatCategoria, makeTeamHelpers, deriveGanadorId } from './utils.js?v=39';
 
 let allJugadores = [];
 let allEquipos = [];
@@ -304,6 +304,20 @@ function _attachRRLive() {
         });
         _live.rr.push(unsub);
     });
+    // Listener en vivo de las jornadas (ej. flag cerrada → bono +5 en posiciones)
+    const unsubJ = onSnapshot(col('jornadas'), (snap) => {
+        snap.docs.forEach(d => {
+            const data = normalizeFields(d.data());
+            const existing = allJornadas.find(x => x.id === d.id);
+            if (existing) Object.assign(existing, data);
+            else allJornadas.push({ id: d.id, ...data });
+        });
+        _rebuildRoundRobinDerived();
+        schedulePublicRender();
+    }, (err) => {
+        console.error('Error en listener de jornadas:', err);
+    });
+    _live.rr.push(unsubJ);
 }
 
 function _attachSemisLive() {
