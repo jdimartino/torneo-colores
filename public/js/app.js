@@ -517,38 +517,37 @@ function renderPosiciones() {
         '</div>';
     });
 
-    // Semifinal preview
+    // Playoff preview
     if (standings.length >= 4) {
-        const s1 = standings[0], s4 = standings[3];
-        const s2 = standings[1], s3 = standings[2];
+        const s1 = standings[0], s2 = standings[1], s3 = standings[2], s4 = standings[3];
         html += '<div class="card" style="border-top:3px solid var(--secondary);margin-top:0.75rem;">' +
-            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.6rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--secondary);">emoji_events</span> SEMIFINALES</div>' +
+            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.6rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--secondary);">emoji_events</span> FASE FINAL</div>' +
             '<div style="display:flex;flex-direction:column;gap:0.6rem;">' +
             '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
-            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">SEMIFINAL 1</div>' +
+            '<div style="font-size:0.68rem;color:var(--secondary);margin-bottom:0.3rem;font-weight:600;">FINAL</div>' +
             '<div style="display:flex;align-items:center;gap:0.4rem;">' +
             '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s1.color + ';"></span>' +
             '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">1º ' + esc(s1.nombre) + '</span>' +
             '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
-            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s4.color + ';"></span>' +
-            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">4º ' + esc(s4.nombre) + '</span>' +
-            '</div></div>' +
-            '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
-            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">SEMIFINAL 2</div>' +
-            '<div style="display:flex;align-items:center;gap:0.4rem;">' +
             '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s2.color + ';"></span>' +
             '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">2º ' + esc(s2.nombre) + '</span>' +
-            '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
+            '</div></div>' +
+            '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
+            '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">3ER PUESTO</div>' +
+            '<div style="display:flex;align-items:center;gap:0.4rem;">' +
             '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s3.color + ';"></span>' +
             '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">3º ' + esc(s3.nombre) + '</span>' +
+            '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s4.color + ';"></span>' +
+            '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">4º ' + esc(s4.nombre) + '</span>' +
             '</div></div>' +
             '</div>' +
             (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se definirán al finalizar el Round Robin</div>') +
             '</div>';
     } else if (standings.length > 0) {
         html += '<div class="card" style="border-top:3px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
-            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--on-surface-variant-40);">info</span> SEMIFINALES</div>' +
-            '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Se necesitan al menos 4 equipos para definir semifinales.</div>' +
+            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--on-surface-variant-40);">info</span> FASE FINAL</div>' +
+            '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Se necesitan al menos 4 equipos para definir la fase final.</div>' +
             '</div>';
     }
 
@@ -872,7 +871,7 @@ function _renderJugadorPartidos(jugId, equipoId) {
         const catTxt = formatCategoria(p.categoria || '');
         let headerLine = catTxt;
         if (jornadaNum != null) headerLine += ' · Jornada ' + jornadaNum;
-        if (fuente === 'semifinal') headerLine = 'Semifinal ' + headerLine;
+        if (fuente === 'semifinal') headerLine = 'Fase Final · ' + headerLine;
         else if (fuente === 'final') headerLine = 'Final ' + headerLine;
 
         return '<div class="partido-card">' +
@@ -1113,7 +1112,7 @@ function renderSemifinalesPublic() {
     const el = document.getElementById('semifinales');
 
     if (!allSemifinales.length) {
-        el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">emoji_events</span><p>Semifinales no disponibles.<br>Las semifinales se generan al finalizar el Round Robin.</p></div>';
+        el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">emoji_events</span><p>Fase final no disponible.<br>La fase final se genera al finalizar el Round Robin.</p></div>';
         return;
     }
 
@@ -1136,9 +1135,10 @@ function renderSemifinalesPublic() {
                               ganadorId === semi.equipo_b_id ? semi.equipo_b_nombre : null;
         const ganadorColor = ganadorId === semi.equipo_a_id ? aColor : bColor;
         const borderColor = ganadorNombre ? ganadorColor : 'var(--primary)';
+        const faseLabel = (semi.numero === 1) ? 'FINAL' : '3ER PUESTO';
 
-        html += '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin:1rem 0 0.5rem;color:var(--primary);">' +
-            '<span class="material-symbols-outlined" style="font-size:0.85rem;vertical-align:middle;">emoji_events</span> SEMIFINAL ' + (semi.numero || '?') +
+        html += '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin:1rem 0 0.5rem;color:' + (semi.numero === 1 ? 'var(--secondary)' : 'var(--primary)') + ';">' +
+            '<span class="material-symbols-outlined" style="font-size:0.85rem;vertical-align:middle;">' + (semi.numero === 1 ? 'workspace_premium' : 'emoji_events') + '</span> ' + faseLabel +
             '</div>';
 
         html += '<div class="card" style="border-left:4px solid ' + borderColor + ';margin-bottom:0.75rem;">' +
@@ -1161,7 +1161,6 @@ function renderSemifinalesPublic() {
             '</div>' +
             '</div>';
 
-        const faseLabel = 'Semifinal ' + (semi.numero || '?');
         const sortedPartidos = semi.partidos.slice().sort((a, b) => {
             const sa = a.estado === 'finalizado' ? 1 : 0;
             const sb = b.estado === 'finalizado' ? 1 : 0;
@@ -1181,7 +1180,7 @@ function renderFinalPublic() {
     if (!allFinales.length) {
         const finishedSemis = allSemifinales.filter(s => s.estado === 'finalizado');
         if (finishedSemis.length < 2) {
-            el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">workspace_premium</span><p>Final pendiente.<br>Se habilitará al completar ambas semifinales.</p></div>';
+            el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">workspace_premium</span><p>Final pendiente.<br>Se habilitará al completar la fase final.</p></div>';
         } else {
             el.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">workspace_premium</span><p>Final pendiente.<br>El administrador aún no la ha generado.</p></div>';
         }

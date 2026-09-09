@@ -9,7 +9,7 @@ const PRECACHE_URLS = [
   '/favicon.png',
   '/apple-touch-icon.png',
   '/js/app.js?v=39',
-  '/js/admin.js?v=69',
+  '/js/admin.js?v=70',
   '/js/firebase.js',
   '/js/firebasePublic.js',
   '/js/config.js',

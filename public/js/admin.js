@@ -986,6 +986,46 @@ function renderFinanceMovimientos(movimientos) {
 // ═══════════════════════════════════════════
 // REPORTES
 // ═══════════════════════════════════════════
+
+function renderSeccionPagoEquipo(prefix, id, titulo, jugadores, tipo) {
+    const bodyId = 'col-body-' + prefix + '-' + id;
+    const chevId = 'col-chev-' + prefix + '-' + id;
+    const { grupos, sinEquipo } = agruparPorEquipo(jugadores);
+
+    let html = '<button type="button" onclick="toggleCol(\'' + prefix + '\',\'' + id + '\')" style="display:flex;align-items:center;gap:0.4rem;width:100%;background:transparent;border:none;padding:0;margin-top:1rem;cursor:pointer;text-align:left;">';
+    html += '<span style="font-size:0.8rem;font-family:\'Lexend\',sans-serif;font-weight:600;color:var(--on-surface-variant);">' + esc(titulo) + '</span>';
+    html += '<span class="badge" style="background:var(--white-8);color:var(--on-surface-variant-40);">' + jugadores.length + '</span>';
+    html += '<span class="material-symbols-outlined" id="' + chevId + '" style="margin-left:auto;font-size:1.1rem;color:var(--on-surface-variant-40);transition:transform 0.2s;">expand_more</span>';
+    html += '</button>';
+
+    html += '<div id="' + bodyId + '" style="display:none;">';
+    if (!jugadores.length) {
+        html += '<div style="padding:0.5rem 0 0.9rem;font-size:0.75rem;color:var(--on-surface-variant-40);">Sin registros</div>';
+    } else {
+        grupos.forEach(g => {
+            html += '<div style="margin-top:0.6rem;">';
+            html += '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.5rem;background:var(--white-5);border-radius:6px;">';
+            html += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + esc(g.equipo.color || '#888') + ';flex-shrink:0;"></span>';
+            html += '<span style="font-size:0.72rem;font-weight:600;color:var(--on-surface-variant);">' + esc(g.equipo.nombre) + '</span>';
+            html += '<span style="font-size:0.65rem;color:var(--on-surface-variant-40);">' + g.jugadores.length + '</span>';
+            html += '</div>';
+            g.jugadores.forEach(j => { html += estatusItemRow(j, tipo); });
+            html += '</div>';
+        });
+        if (sinEquipo.length) {
+            html += '<div style="margin-top:0.6rem;">';
+            html += '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.5rem;background:var(--white-5);border-radius:6px;">';
+            html += '<span style="font-size:0.72rem;font-weight:600;color:var(--on-surface-variant-40);">SIN EQUIPO</span>';
+            html += '<span style="font-size:0.65rem;color:var(--on-surface-variant-40);">' + sinEquipo.length + '</span>';
+            html += '</div>';
+            sinEquipo.forEach(j => { html += estatusItemRow(j, tipo); });
+            html += '</div>';
+        }
+    }
+    html += '</div>';
+    return html;
+}
+
 function renderReportes() {
     const panel = document.getElementById('panel-reportes');
     if (!panel) return;
@@ -1055,9 +1095,9 @@ function renderReportes() {
     html += '<span class="badge badge-muted">' + allJugadores.length + ' Total</span>';
     html += '</div>';
 
-    html += renderSeccionCol('est', 'pendiente', 'SIN PAGAR', sinPagar, (j) => estatusItemRow(j, 'pendiente'));
-    html += renderSeccionCol('est', 'exonerado', 'EXONERADOS', exonerados, (j) => estatusItemRow(j, 'exonerado'));
-    html += renderSeccionCol('est', 'pagado', 'PAGADOS', pagados, (j) => estatusItemRow(j, 'pagado'));
+    html += renderSeccionPagoEquipo('est', 'pendiente', 'SIN PAGAR', sinPagar, 'pendiente');
+    html += renderSeccionPagoEquipo('est', 'exonerado', 'EXONERADOS', exonerados, 'exonerado');
+    html += renderSeccionPagoEquipo('est', 'pagado', 'PAGADOS', pagados, 'pagado');
 
     html += '</div>';
 
@@ -1149,12 +1189,15 @@ function estatusItemRow(j, tipo) {
     const nombre = esc((j.nombre || '') + ' ' + (j.apellidos || ''));
     const cat = j.categoria ? '<span style="color:var(--primary);">' + esc(j.categoria) + '</span>' : '';
     const socio = j.status_socio ? esc(j.status_socio) : '';
+    const equipo = j.equipo_id ? getTeamName(j.equipo_id) : '';
+    const eqColor = j.equipo_id ? getTeamColor(j.equipo_id) : '';
+    const eqHtml = equipo ? '<span style="color:' + esc(eqColor) + ';font-weight:600;">' + esc(equipo) + '</span>' : '';
     const detalle = tipo === 'pagado' ? detallePagoJugador(j) : (tipo === 'exonerado' ? 'Exonerado' : 'Sin pago');
     const badgeClass = tipo === 'pagado' ? 'badge-success' : tipo === 'exonerado' ? 'badge-muted' : 'badge-danger';
     let html = '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0;border-bottom:1px solid var(--white-5);">';
     html += '<div style="flex:1;min-width:0;">';
     html += '<div style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + nombre + '</div>';
-    html += '<div style="font-size:0.66rem;color:var(--on-surface-variant-40);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + [cat, socio].filter(Boolean).join(' · ') + '</div>';
+    html += '<div style="font-size:0.66rem;color:var(--on-surface-variant-40);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + [eqHtml, cat, socio].filter(Boolean).join(' · ') + '</div>';
     html += '</div>';
     if (detalle) {
         html += '<span class="badge ' + badgeClass + '" style="white-space:nowrap;max-width:45%;overflow:hidden;text-overflow:ellipsis;">' + esc(detalle) + '</span>';
@@ -1220,6 +1263,15 @@ function getGruposEquipos() {
     return { grupos, sinEquipo };
 }
 
+function agruparPorEquipo(jugadores) {
+    const grupos = allEquipos.map(eq => ({
+        equipo: eq,
+        jugadores: jugadores.filter(j => j.equipo_id === eq.id).sort(porNombre)
+    })).filter(g => g.jugadores.length > 0);
+    const sinEquipo = jugadores.filter(j => !j.equipo_id).sort(porNombre);
+    return { grupos, sinEquipo };
+}
+
 function exportarEstatusPagoPDF() {
     if (!allJugadores.length) {
         toast('No hay jugadores para exportar', 'error');
@@ -1254,25 +1306,64 @@ function exportarEstatusPagoPDF() {
         doc.setLineWidth(0.3);
         doc.line(margin, y, pageWidth - margin, y);
         y += 6;
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9);
+
         if (!jugadores.length) {
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(9);
             doc.text('-', margin, y);
             y += 6;
         } else {
-            jugadores.forEach(j => {
+            const { grupos, sinEquipo } = agruparPorEquipo(jugadores);
+            grupos.forEach(g => {
                 if (y > pageHeight - 20) { doc.addPage(); y = 20; }
-                const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
-                const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
-                let detalle = '';
-                if (tipo === 'pagado') detalle = detallePagoJugador(j);
-                else if (tipo === 'exonerado') detalle = 'Exonerado';
-                else detalle = 'Sin pago';
-                doc.text(nombre, margin, y);
-                doc.text(cat.substring(0, 24), margin + 90, y);
-                doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
-                y += 6;
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(10);
+                doc.setTextColor(80);
+                doc.text(g.equipo.nombre + ' (' + g.jugadores.length + ')', margin, y);
+                y += 5;
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(9);
+                doc.setTextColor(0);
+                g.jugadores.forEach(j => {
+                    if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+                    const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
+                    const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
+                    let detalle = '';
+                    if (tipo === 'pagado') detalle = detallePagoJugador(j);
+                    else if (tipo === 'exonerado') detalle = 'Exonerado';
+                    else detalle = 'Sin pago';
+                    doc.text(nombre, margin + 4, y);
+                    doc.text(cat.substring(0, 24), margin + 94, y);
+                    doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
+                    y += 5;
+                });
+                y += 2;
             });
+            if (sinEquipo.length) {
+                if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(10);
+                doc.setTextColor(80);
+                doc.text('SIN EQUIPO (' + sinEquipo.length + ')', margin, y);
+                y += 5;
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(9);
+                doc.setTextColor(0);
+                sinEquipo.forEach(j => {
+                    if (y > pageHeight - 20) { doc.addPage(); y = 20; }
+                    const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
+                    const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
+                    let detalle = '';
+                    if (tipo === 'pagado') detalle = detallePagoJugador(j);
+                    else if (tipo === 'exonerado') detalle = 'Exonerado';
+                    else detalle = 'Sin pago';
+                    doc.text(nombre, margin + 4, y);
+                    doc.text(cat.substring(0, 24), margin + 94, y);
+                    doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
+                    y += 5;
+                });
+                y += 2;
+            }
         }
         y += 6;
     };
@@ -4795,38 +4886,37 @@ function renderPosiciones() {
                 '</div>';
         });
 
-        // Semifinal preview
+        // Playoff preview
         if (standings.length >= 4) {
-            const s1 = standings[0], s4 = standings[3];
-            const s2 = standings[1], s3 = standings[2];
+            const s1 = standings[0], s2 = standings[1], s3 = standings[2], s4 = standings[3];
             html += '<div class="card" style="border-top:3px solid var(--secondary);margin-top:0.75rem;">' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.6rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--secondary);">emoji_events</span> SEMIFINALES</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.6rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--secondary);">emoji_events</span> FASE FINAL</div>' +
                 '<div style="display:flex;flex-direction:column;gap:0.6rem;">' +
                 '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
-                '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">SEMIFINAL 1</div>' +
+                '<div style="font-size:0.68rem;color:var(--secondary);margin-bottom:0.3rem;font-weight:600;">FINAL</div>' +
                 '<div style="display:flex;align-items:center;gap:0.4rem;">' +
                 '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s1.color + ';"></span>' +
                 '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">1º ' + esc(s1.nombre) + '</span>' +
                 '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
-                '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s4.color + ';"></span>' +
-                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">4º ' + esc(s4.nombre) + '</span>' +
-                '</div></div>' +
-                '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
-                '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">SEMIFINAL 2</div>' +
-                '<div style="display:flex;align-items:center;gap:0.4rem;">' +
                 '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s2.color + ';"></span>' +
                 '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">2º ' + esc(s2.nombre) + '</span>' +
-                '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
+                '</div></div>' +
+                '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;">' +
+                '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">3ER PUESTO</div>' +
+                '<div style="display:flex;align-items:center;gap:0.4rem;">' +
                 '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s3.color + ';"></span>' +
                 '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">3º ' + esc(s3.nombre) + '</span>' +
+                '<span style="font-family:Lexend;font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);margin:0 0.3rem;">VS</span>' +
+                '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + s4.color + ';"></span>' +
+                '<span style="font-family:Lexend;font-weight:600;font-size:0.82rem;">4º ' + esc(s4.nombre) + '</span>' +
                 '</div></div>' +
                 '</div>' +
                 (allComplete ? '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--secondary);font-weight:600;">¡Los clasificados están definidos!</div>' : '<div style="margin-top:0.6rem;text-align:center;font-size:0.72rem;color:var(--on-surface-variant-40);">Los cruces se definirán al finalizar el Round Robin</div>') +
                 '</div>';
         } else if (standings.length > 0) {
             html += '<div class="card" style="border-top:3px solid var(--on-surface-variant-40);margin-top:0.75rem;">' +
-                '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--on-surface-variant-40);">info</span> SEMIFINALES</div>' +
-                '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Se necesitan al menos 4 equipos para definir semifinales.</div>' +
+                '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;margin-bottom:0.4rem;"><span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--on-surface-variant-40);">info</span> FASE FINAL</div>' +
+                '<div style="font-size:0.75rem;color:var(--on-surface-variant-40);">Se necesitan al menos 4 equipos para definir la fase final.</div>' +
                 '</div>';
         }
 
@@ -5227,7 +5317,7 @@ async function loadSemifinales() {
         }));
         allSemifinales = results;
     } catch (e) {
-        console.error('Error loading semifinales:', e);
+        console.error('Error loading fase final:', e);
     }
 }
 
@@ -5249,7 +5339,7 @@ async function generateSemifinales() {
         const result = calculateStandings(allEquipos, allEnfrentamientosData);
 
         if (result.standings.length < 4) {
-            toast('Se necesitan al menos 4 equipos para generar semifinales', 'error');
+            toast('Se necesitan al menos 4 equipos para generar la fase final', 'error');
             return;
         }
 
@@ -5259,7 +5349,7 @@ async function generateSemifinales() {
         overlay.className = 'modal-overlay';
         overlay.innerHTML =
             '<div class="modal">' +
-            '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Confirmar Semifinales</h3>' +
+            '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Confirmar Fase Final</h3>' +
             '<div style="margin-bottom:0.8rem;">' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CLASIFICADOS</div>' +
             s.slice(0, 4).map((eq, i) =>
@@ -5274,16 +5364,16 @@ async function generateSemifinales() {
             '<div style="background:var(--white-5);border-radius:8px;padding:0.6rem;margin-bottom:1rem;">' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CRUCES</div>' +
             '<div style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin-bottom:0.3rem;">' +
-            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">SF1</span>' +
+            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">FINAL</span>' +
             '<span style="color:' + s[0].color + ';font-weight:600;">' + esc(s[0].nombre) + '</span>' +
             '<span style="font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);">VS</span>' +
-            '<span style="color:' + s[3].color + ';font-weight:600;">' + esc(s[3].nombre) + '</span>' +
+            '<span style="color:' + s[1].color + ';font-weight:600;">' + esc(s[1].nombre) + '</span>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;">' +
-            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">SF2</span>' +
-            '<span style="color:' + s[1].color + ';font-weight:600;">' + esc(s[1].nombre) + '</span>' +
-            '<span style="font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);">VS</span>' +
+            '<span style="background:rgba(0,212,170,0.15);color:var(--primary);padding:1px 6px;border-radius:8px;font-size:0.68rem;font-weight:600;">3° PUESTO</span>' +
             '<span style="color:' + s[2].color + ';font-weight:600;">' + esc(s[2].nombre) + '</span>' +
+            '<span style="font-weight:800;font-size:0.72rem;color:var(--on-surface-variant-40);">VS</span>' +
+            '<span style="color:' + s[3].color + ';font-weight:600;">' + esc(s[3].nombre) + '</span>' +
             '</div>' +
             '</div>' +
             '<div class="btn-group" style="justify-content:flex-end;">' +
@@ -5307,20 +5397,20 @@ async function generateSemifinales() {
 }
 
 async function doGenerateSemifinales(s) {
-    showLoading('Generando semifinales...');
+    showLoading('Generando fase final...');
     try {
         await ensureCategorias();
         const catCount = getDrawCategoriasActivas().length;
-        const semifinal1 = { equipo_a_id: s[0].id, equipo_a_nombre: s[0].nombre, equipo_a_posicion: 1, equipo_a_color: s[0].color, equipo_b_id: s[3].id, equipo_b_nombre: s[3].nombre, equipo_b_posicion: 4, equipo_b_color: s[3].color, ganador_equipo_id: null, estado: 'pendiente', numero: 1, partidos_esperados: catCount };
-        const semifinal2 = { equipo_a_id: s[1].id, equipo_a_nombre: s[1].nombre, equipo_a_posicion: 2, equipo_a_color: s[1].color, equipo_b_id: s[2].id, equipo_b_nombre: s[2].nombre, equipo_b_posicion: 3, equipo_b_color: s[2].color, ganador_equipo_id: null, estado: 'pendiente', numero: 2, partidos_esperados: catCount };
+        const semifinal1 = { equipo_a_id: s[0].id, equipo_a_nombre: s[0].nombre, equipo_a_posicion: 1, equipo_a_color: s[0].color, equipo_b_id: s[1].id, equipo_b_nombre: s[1].nombre, equipo_b_posicion: 2, equipo_b_color: s[1].color, ganador_equipo_id: null, estado: 'pendiente', numero: 1, partidos_esperados: catCount };
+        const semifinal2 = { equipo_a_id: s[2].id, equipo_a_nombre: s[2].nombre, equipo_a_posicion: 3, equipo_a_color: s[2].color, equipo_b_id: s[3].id, equipo_b_nombre: s[3].nombre, equipo_b_posicion: 4, equipo_b_color: s[3].color, ganador_equipo_id: null, estado: 'pendiente', numero: 2, partidos_esperados: catCount };
 
         await Promise.all([addDoc(semiCol(), semifinal1), addDoc(semiCol(), semifinal2)]);
 
-        toast('Semifinales generadas — agregá las categorías que desees', 'success');
+        toast('Fase final generada — agregá las categorías que desees', 'success');
         await loadSemifinales();
         renderSemifinales();
     } catch (e) {
-        toast('Error al generar semifinales', 'error');
+        toast('Error al generar la fase final', 'error');
         console.error(e);
     } finally {
         hideLoading();
@@ -5570,12 +5660,13 @@ function cerrarSemifinal(semiId) {
     const ganadorColor = aWins > bWins ? (semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888') : (semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888');
     const aColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#888';
     const bColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#888';
+    const faseLabel = (semi.numero === 1) ? 'FINAL' : '3ER PUESTO';
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML =
         '<div class="modal">' +
-        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Cerrar Semifinal ' + (semi.numero || '') + '</h3>' +
+        '<h3 style="font-size:0.95rem;margin-bottom:0.8rem;">Cerrar ' + faseLabel + '</h3>' +
         '<div style="margin-bottom:0.8rem;">' +
         '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;font-size:0.82rem;">' +
         '<span style="width:10px;height:10px;border-radius:50%;background:' + aColor + ';flex-shrink:0;"></span>' +
@@ -5594,7 +5685,7 @@ function cerrarSemifinal(semiId) {
         '<span style="width:12px;height:12px;border-radius:50%;background:' + ganadorColor + ';"></span>' +
         '<span style="font-family:Lexend;font-weight:700;font-size:0.9rem;color:var(--secondary);">' + esc(ganadorName) + '</span>' +
         '</div>' +
-        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-top:0.2rem;">avanza a la Final</div>' +
+        '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-top:0.2rem;">' + (semi.numero === 1 ? 'campeón del torneo' : 'avanza al podio') + '</div>' +
         '</div>' +
         '<div class="btn-group" style="justify-content:flex-end;">' +
         '<button class="btn btn-outline" id="btn-cancel-close-semi">Cancelar</button>' +
@@ -5606,16 +5697,16 @@ function cerrarSemifinal(semiId) {
     document.getElementById('btn-cancel-close-semi').addEventListener('click', () => overlay.remove());
     document.getElementById('btn-confirm-close-semi').addEventListener('click', async () => {
         overlay.remove();
-        showLoading('Cerrando semifinal...');
+        showLoading('Cerrando ' + faseLabel.toLowerCase() + '...');
         try {
             await updateDoc(semiDocRef(semiId), { ganador_equipo_id: ganadorId, estado: 'finalizado' });
             semi.ganador_equipo_id = ganadorId;
             semi.estado = 'finalizado';
-            toast('Semifinal cerrada — Ganador: ' + ganadorName, 'success');
+            toast(faseLabel + ' cerrada — Ganador: ' + ganadorName, 'success');
             await loadSemiPartidos(semiId);
             renderSemifinalDetail();
         } catch (e) {
-            toast('Error al cerrar semifinal', 'error');
+            toast('Error al cerrar ' + faseLabel.toLowerCase(), 'error');
             console.error(e);
         } finally {
             hideLoading();
@@ -5791,7 +5882,7 @@ function renderSemifinales() {
         return;
     }
 
-    panelLoading(panel, 'Cargando semifinales...');
+    panelLoading(panel, 'Cargando fase final...');
     loadAllEnfrentamientosAndPartidos().then(() => loadSemifinales()).then(() => {
         const result = calculateStandings(allEquipos, allEnfrentamientosData);
         const allComplete = result.roundStatus === 'finalizado';
@@ -5804,7 +5895,7 @@ function renderSemifinales() {
             '<div style="display:flex;align-items:center;gap:0.5rem;">' +
             '<span class="material-symbols-outlined" style="font-size:1rem;color:' + (allComplete ? 'var(--secondary)' : 'var(--primary)') + ';">' + (allComplete ? 'check_circle' : 'hourglass_empty') + '</span>' +
             '<div>' +
-            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">SEMIFINALES</div>' +
+            '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">FASE FINAL</div>' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);">' +
             (allComplete ? 'Round Robin finalizado — Clasificación definida' : 'Round Robin en curso — Clasificación parcial') +
             '</div></div></div></div>';
@@ -5812,8 +5903,8 @@ function renderSemifinales() {
         if (!hasSemis) {
             html += '<div class="empty-state" style="padding:2rem;">' +
                 '<span class="material-symbols-outlined">emoji_events</span>' +
-                '<p>No hay semifinales generadas.</p>' +
-                '<button class="btn btn-primary" id="btn-gen-semis"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Generar Semifinales</button>' +
+                '<p>No hay fase final generada.</p>' +
+                '<button class="btn btn-primary" id="btn-gen-semis"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Generar Fase Final</button>' +
                 '</div>';
             panel.innerHTML = html;
             document.getElementById('btn-gen-semis')?.addEventListener('click', () => safeAction(generateSemifinales));
@@ -5839,7 +5930,7 @@ function renderSemifinales() {
                                 semi.ganador_equipo_id === semi.equipo_b_id ? semi.equipo_b_nombre : null;
 
             html += '<div class="card" style="cursor:pointer;border-left:4px solid ' + (ganadorName ? (semi.ganador_equipo_id === semi.equipo_a_id ? aColor : bColor) : 'var(--primary)') + ';" data-semi-id="' + semi.id + '">' +
-                '<div style="font-size:0.68rem;color:var(--on-surface-variant-40);margin-bottom:0.3rem;">SEMIFINAL ' + (semi.numero || '?') + '</div>' +
+                '<div style="font-size:0.68rem;color:' + (semi.numero === 1 ? 'var(--secondary)' : 'var(--on-surface-variant-40)') + ';margin-bottom:0.3rem;font-weight:' + (semi.numero === 1 ? '600' : '400') + ';">' + ((semi.numero === 1) ? 'FINAL' : '3ER PUESTO') + '</div>' +
                 '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">' +
                 '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.88rem;">' +
                 '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + aColor + ';"></span>' +
@@ -5891,10 +5982,11 @@ async function renderSemifinalDetail() {
     let html = '';
 
     // Header
-    html += '<div class="card" style="border-top:3px solid var(--primary);">' +
+    const faseLabel = (semi.numero === 1) ? 'FINAL' : '3ER PUESTO';
+    html += '<div class="card" style="border-top:3px solid ' + (semi.numero === 1 ? 'var(--secondary)' : 'var(--primary)') + ';">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem;">' +
         '<div>' +
-        '<div style="font-size:0.7rem;color:var(--on-surface-variant-40);margin-bottom:0.15rem;">SEMIFINAL ' + (semi.numero || '?') + '</div>' +
+        '<div style="font-size:0.7rem;color:' + (semi.numero === 1 ? 'var(--secondary)' : 'var(--on-surface-variant-40)') + ';margin-bottom:0.15rem;font-weight:' + (semi.numero === 1 ? '600' : '400') + ';">' + faseLabel + '</div>' +
         '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">' +
         '<span style="display:inline-flex;align-items:center;gap:0.3rem;font-family:Lexend;font-weight:600;font-size:0.95rem;">' +
         '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:' + aColor + ';"></span>' +
@@ -5936,7 +6028,7 @@ async function renderSemifinalDetail() {
 
     if (semi.estado !== 'finalizado' && aWins + bWins > 0) {
         html += '<div style="margin:0.75rem 0;display:flex;gap:0.5rem;flex-wrap:wrap;">' +
-            '<button class="btn btn-primary" id="btn-close-semi" style="flex:1;"><span class="material-symbols-outlined" style="font-size:1rem;">lock</span> Cerrar Semifinal</button>' +
+            '<button class="btn btn-primary" id="btn-close-semi" style="flex:1;"><span class="material-symbols-outlined" style="font-size:1rem;">lock</span> Cerrar ' + ((semi.numero === 1) ? 'Final' : '3er Puesto') + '</button>' +
             '<button class="btn btn-outline" id="btn-gen-final-detail" style="flex:1;"><span class="material-symbols-outlined" style="font-size:1rem;">workspace_premium</span> Generar Final</button>' +
             '</div>';
     } else {
@@ -5958,7 +6050,7 @@ async function renderSemifinalDetail() {
                         part._resContainerType = 'semifinal';
                         part._resContainerId = selectedSemifinalId;
                         part._resJornadaId = selectedSemifinalId;
-                        part._jornadaNumero = 'Semifinal';
+                        part._jornadaNumero = (semi.numero === 1) ? 'Final' : '3er Puesto';
                         part._teamAColor = semi.equipo_a_color || getTeamColor(semi.equipo_a_id) || '#4da6ff';
                         part._teamBColor = semi.equipo_b_color || getTeamColor(semi.equipo_b_id) || '#feb300';
                         if (!resPartidos.find(p => p.id === part.id)) resPartidos.push(part);
@@ -6300,13 +6392,13 @@ async function generateFinal() {
     try {
         await loadSemifinales();
         if (allSemifinales.length < 2) {
-            toast('Se necesitan al menos 2 semifinales para generar la final', 'error');
+            toast('Se necesitan al menos 2 cruces de la fase final para generar la final', 'error');
             return;
         }
 
         const sortedSemis = [...allSemifinales].sort((a, b) => (a.numero || 0) - (b.numero || 0));
 
-        // Semifinal 1 winner calculation
+        // Final winner calculation (from cruz numero:1)
         const s1 = sortedSemis[0];
         let partidos1 = s1.partidos || [];
         if (!partidos1.length) {
@@ -6324,7 +6416,7 @@ async function generateFinal() {
         const winnerName1 = winnerId1 === s1.equipo_a_id ? s1.equipo_a_nombre : s1.equipo_b_nombre;
         const winnerColor1 = winnerId1 === s1.equipo_a_id ? (s1.equipo_a_color || getTeamColor(s1.equipo_a_id)) : (s1.equipo_b_color || getTeamColor(s1.equipo_b_id));
 
-        // Semifinal 2 winner calculation
+        // 3rd place winner calculation (from cruz numero:2)
         const s2 = sortedSemis[1];
         let partidos2 = s2.partidos || [];
         if (!partidos2.length) {
@@ -6353,13 +6445,13 @@ async function generateFinal() {
             '<div style="margin-bottom:0.8rem;">' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);margin-bottom:0.4rem;font-weight:600;">CLASIFICADOS SEGÚN RESULTADOS ACTUALES</div>' +
             '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.5rem;background:var(--white-5);border-radius:6px;margin-bottom:0.4rem;">' +
-            '<span style="font-size:0.75rem;font-weight:600;color:var(--primary);width:3.5rem;">SF 1</span>' +
+            '<span style="font-size:0.75rem;font-weight:600;color:var(--secondary);width:3.5rem;">FINAL</span>' +
             '<span style="width:12px;height:12px;border-radius:50%;background:' + winnerColor1 + ';flex-shrink:0;"></span>' +
             '<span style="flex:1;font-weight:600;font-size:0.85rem;">' + esc(winnerName1) + '</span>' +
             '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);">' + aWins1 + ' - ' + bWins1 + '</span>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.5rem;background:var(--white-5);border-radius:6px;">' +
-            '<span style="font-size:0.75rem;font-weight:600;color:var(--primary);width:3.5rem;">SF 2</span>' +
+            '<span style="font-size:0.75rem;font-weight:600;color:var(--primary);width:3.5rem;">3° PUESTO</span>' +
             '<span style="width:12px;height:12px;border-radius:50%;background:' + winnerColor2 + ';flex-shrink:0;"></span>' +
             '<span style="flex:1;font-weight:600;font-size:0.85rem;">' + esc(winnerName2) + '</span>' +
             '<span style="font-size:0.72rem;color:var(--on-surface-variant-40);">' + aWins2 + ' - ' + bWins2 + '</span>' +
@@ -6728,13 +6820,13 @@ function renderFinal() {
             '<div>' +
             '<div style="font-family:Lexend;font-weight:600;font-size:0.85rem;">FINAL</div>' +
             '<div style="font-size:0.72rem;color:var(--on-surface-variant-40);">' +
-            (allSemisComplete ? 'Semifinales completadas — Final disponible' : 'Esperando que se completen las semifinales (' + finishedSemis.length + '/2)') +
+            (allSemisComplete ? 'Fase final completada — Final disponible' : 'Esperando que se completen los cruces de la fase final (' + finishedSemis.length + '/2)') +
             '</div></div></div></div>';
 
         if (!hasFinal) {
             html += '<div class="empty-state" style="padding:2rem;">' +
                 '<span class="material-symbols-outlined">workspace_premium</span>' +
-                '<p>No hay final generada.<br>Podés generarla en cualquier momento con los marcadores actuales de las semifinales.</p>' +
+                '<p>No hay final generada.<br>Podés generarla en cualquier momento con los marcadores actuales de la fase final.</p>' +
                 '<button class="btn btn-primary" id="btn-gen-final"><span class="material-symbols-outlined" style="font-size:1rem;">add</span> Generar Final</button>' +
                 '</div>';
             panel.innerHTML = html;
