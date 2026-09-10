@@ -1279,7 +1279,7 @@ function exportarEstatusPagoPDF() {
     }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const { sinPagar, exonerados, pagados } = getGruposEstatusPago();
+    const { sinPagar } = getGruposEstatusPago();
 
     const margin = 15;
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -1292,10 +1292,10 @@ function exportarEstatusPagoPDF() {
     doc.setFont('helvetica', 'normal');
     doc.text('Torneo de Colores - ' + new Date().toLocaleDateString('es-VE'), margin, 28);
     doc.setFont('helvetica', 'bold');
-    doc.text('Sin pagar: ' + sinPagar.length + ' · Exonerados: ' + exonerados.length + ' · Pagados: ' + pagados.length, margin, 34);
+    doc.text('Sin pagar: ' + sinPagar.length, margin, 34);
     let y = 42;
 
-    const drawSeccion = (titulo, jugadores, tipo) => {
+    const drawSeccion = (titulo, jugadores) => {
         if (y > pageHeight - 30) { doc.addPage(); y = 20; }
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(12);
@@ -1328,10 +1328,7 @@ function exportarEstatusPagoPDF() {
                     if (y > pageHeight - 20) { doc.addPage(); y = 20; }
                     const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
                     const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
-                    let detalle = '';
-                    if (tipo === 'pagado') detalle = detallePagoJugador(j);
-                    else if (tipo === 'exonerado') detalle = 'Exonerado';
-                    else detalle = 'Sin pago';
+                    const detalle = 'Sin pago';
                     doc.text(nombre, margin + 4, y);
                     doc.text(cat.substring(0, 24), margin + 94, y);
                     doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
@@ -1353,10 +1350,7 @@ function exportarEstatusPagoPDF() {
                     if (y > pageHeight - 20) { doc.addPage(); y = 20; }
                     const nombre = ((j.nombre || '') + ' ' + (j.apellidos || '')).substring(0, 32);
                     const cat = (j.categoria || '') + (j.status_socio ? ' · ' + j.status_socio : '');
-                    let detalle = '';
-                    if (tipo === 'pagado') detalle = detallePagoJugador(j);
-                    else if (tipo === 'exonerado') detalle = 'Exonerado';
-                    else detalle = 'Sin pago';
+                    const detalle = 'Sin pago';
                     doc.text(nombre, margin + 4, y);
                     doc.text(cat.substring(0, 24), margin + 94, y);
                     doc.text(detalle.substring(0, 34), pageWidth - margin, y, { align: 'right' });
@@ -1368,9 +1362,7 @@ function exportarEstatusPagoPDF() {
         y += 6;
     };
 
-    drawSeccion('SIN PAGAR', sinPagar, 'pendiente');
-    drawSeccion('EXONERADOS', exonerados, 'exonerado');
-    drawSeccion('PAGADOS', pagados, 'pagado');
+    drawSeccion('SIN PAGAR', sinPagar);
 
     doc.save('estatus_pago_torneo.pdf');
     toast('PDF generado', 'success');
