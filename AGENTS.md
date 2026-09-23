@@ -1,3 +1,9 @@
+⚠️ Este proyecto comparte Firestore (torneos-tenis-jdm) con tennis-score,
+tennis-stats y torneo-americano. Este es el ÚNICO repo con permiso para
+desplegar reglas/índices (firebase deploy --only firestore:*). NUNCA
+agregues datos de otras apps aquí sin coordinar — y nunca quites la
+sección 'firestore' de este firebase.json.
+
 # Torneo de Colores - Guía de Desarrollo
 
 ## Regla Principal: Mobile First
