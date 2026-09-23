@@ -96,13 +96,13 @@
         }
 
         async function migrateCollection(torneoRef, collName, fieldMap) {
-            const snap = await getDocs(collection(db, 'torneos', torneoRef.id, collName));
+            const snap = await getDocs(collection(db, 'torneosColores', torneoRef.id, collName));
             let migrated = 0;
             let skipped = 0;
             for (const d of snap.docs) {
                 const { updates, count } = migrateDocData(d.data(), fieldMap);
                 if (count > 0) {
-                    await updateDoc(doc(db, 'torneos', torneoRef.id, collName, d.id), updates);
+                    await updateDoc(doc(db, 'torneosColores', torneoRef.id, collName, d.id), updates);
                     migrated++;
                     log(`  ✓ ${d.id} (${count} campos)`, 'ok');
                 } else {
@@ -114,17 +114,17 @@
 
         async function migrateEnfrentamientos(torneoId) {
             // Get all jornadas
-            const jornSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas'));
+            const jornSnap = await getDocs(collection(db, 'torneosColores', torneoId, 'jornadas'));
             let totalMigrated = 0;
             let totalSkipped = 0;
 
             for (const jornDoc of jornSnap.docs) {
                 // Migrate enfrentamientos subcollection
-                const enfSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos'));
+                const enfSnap = await getDocs(collection(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos'));
                 for (const enfDoc of enfSnap.docs) {
                     const { updates, count } = migrateDocData(enfDoc.data(), JORNADA_FIELDS);
                     if (count > 0) {
-                        await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id), updates);
+                        await updateDoc(doc(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id), updates);
                         totalMigrated++;
                         log(`  ✓ enf ${enfDoc.id} (${count} campos)`, 'ok');
                     } else {
@@ -132,11 +132,11 @@
                     }
 
                     // Migrate partidos subcollection under enfrentamientos
-                    const partSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos'));
+                    const partSnap = await getDocs(collection(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos'));
                     for (const partDoc of partSnap.docs) {
                         const { updates, count } = migrateDocData(partDoc.data(), PARTIDO_FIELDS);
                         if (count > 0) {
-                            await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos', partDoc.id), updates);
+                            await updateDoc(doc(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'enfrentamientos', enfDoc.id, 'partidos', partDoc.id), updates);
                             totalMigrated++;
                             log(`  ✓ part ${partDoc.id} (${count} campos)`, 'ok');
                         } else {
@@ -146,11 +146,11 @@
                 }
 
                 // Migrate partidos directly under jornadas
-                const partSnap = await getDocs(collection(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'partidos'));
+                const partSnap = await getDocs(collection(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'partidos'));
                 for (const partDoc of partSnap.docs) {
                     const { updates, count } = migrateDocData(partDoc.data(), PARTIDO_FIELDS);
                     if (count > 0) {
-                        await updateDoc(doc(db, 'torneos', torneoId, 'jornadas', jornDoc.id, 'partidos', partDoc.id), updates);
+                        await updateDoc(doc(db, 'torneosColores', torneoId, 'jornadas', jornDoc.id, 'partidos', partDoc.id), updates);
                         totalMigrated++;
                         log(`  ✓ part-directo ${partDoc.id} (${count} campos)`, 'ok');
                     } else {
@@ -168,7 +168,7 @@
             log('=== Iniciando migración ===', 'info');
 
             try {
-                const torneosSnap = await getDocs(collection(db, 'torneos'));
+                const torneosSnap = await getDocs(collection(db, 'torneosColores'));
                 const torneos = torneosSnap.docs.filter(d => d.id !== 'config');
 
                 log(`Torneos encontrados: ${torneos.length}`, 'info');

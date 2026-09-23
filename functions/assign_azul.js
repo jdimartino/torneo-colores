@@ -94,9 +94,9 @@ function scoreMatch(jugador, target) {
 
 async function main() {
   // 1. Torneo activo
-  const cfgSnap = await db.doc('config/activeTournament').get();
+  const cfgSnap = await db.doc('config/torneosColores_activeTournament').get();
   if (!cfgSnap.exists) {
-    console.log('❌ No existe config/activeTournament');
+    console.log('❌ No existe config/torneosColores_activeTournament');
     return;
   }
   const cfg = cfgSnap.data();
@@ -108,7 +108,7 @@ async function main() {
   console.log('🗂️  Torneo activo:', tid);
 
   // 2. Equipo Azul
-  const equiposSnap = await db.collection(`torneos/${tid}/equipos`).get();
+  const equiposSnap = await db.collection(`torneosColores/${tid}/equipos`).get();
   const equipos = equiposSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const azul = equipos.find(e => normalize(e.nombre).includes('azul'));
   if (!azul) {
@@ -118,7 +118,7 @@ async function main() {
   console.log('🔵 Equipo Azul:', azul.nombre, '->', azul.id);
 
   // 3. Jugadores
-  const jugSnap = await db.collection(`torneos/${tid}/jugadores`).get();
+  const jugSnap = await db.collection(`torneosColores/${tid}/jugadores`).get();
   const jugadores = jugSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   console.log('👥 Jugadores totales:', jugadores.length);
 
@@ -192,7 +192,7 @@ async function main() {
   let ok = 0, err = 0;
   for (const { target, jugador } of asignados) {
     try {
-      await db.collection(`torneos/${tid}/jugadores`).doc(jugador.id).update({ equipo_id: azul.id });
+      await db.collection(`torneosColores/${tid}/jugadores`).doc(jugador.id).update({ equipo_id: azul.id });
       console.log(`  ✔ ${target} → ${jugador.nombre} ${jugador.apellidos || ''} asignado a ${azul.nombre}`);
       ok++;
     } catch (e) {

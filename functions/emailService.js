@@ -27,9 +27,9 @@ function buildEmailService(deps) {
 
   // ── Referencias ──
   const globalConfigRef = () => db.doc(PATH_GLOBAL_CONFIG);
-  const torneoConfigRef = (torneoId) => db.doc(`torneos/${torneoId}/configuracion/email`);
-  const enviosCol = (torneoId) => db.collection(`torneos/${torneoId}/enviosEmail`);
-  const envioRef = (torneoId, envioId) => db.doc(`torneos/${torneoId}/enviosEmail/${envioId}`);
+  const torneoConfigRef = (torneoId) => db.doc(`torneosColores/${torneoId}/configuracion/email`);
+  const enviosCol = (torneoId) => db.collection(`torneosColores/${torneoId}/enviosEmail`);
+  const envioRef = (torneoId, envioId) => db.doc(`torneosColores/${torneoId}/enviosEmail/${envioId}`);
   const statsRef = (fecha) => db.collection(COLLECTION_STATS).doc(fecha);
   const historicoRef = () => db.collection(COLLECTION_STATS).doc(HISTORICO_ID);
 

@@ -21,15 +21,15 @@ const DEFAULT_DRAW_CATEGORIAS = [
 let _catCache = { key: null, todas: [], activas: [] };
 
 function colCategorias() {
-    return collection(db, 'torneos', getActiveTournamentId(), 'categorias');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'categorias');
 }
 
 function docCategoria(id) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'categorias', id);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'categorias', id);
 }
 
 function docCategoriaAuto() {
-    return doc(collection(db, 'torneos', getActiveTournamentId(), 'categorias'));
+    return doc(collection(db, 'torneosColores', getActiveTournamentId(), 'categorias'));
 }
 
 // ── Normalización para comparación de duplicados (trim + lowercase) ──

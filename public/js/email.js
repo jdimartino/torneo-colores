@@ -56,7 +56,7 @@ async function callFn(name, data) {
 }
 
 function globalConfigRef() { return doc(db, 'config', 'emailConfig'); }
-function torneoConfigRef(tid) { return doc(db, 'torneos', tid, 'configuracion', 'email'); }
+function torneoConfigRef(tid) { return doc(db, 'torneosColores', tid, 'configuracion', 'email'); }
 
 function defaultGlobalConfig() {
     return {

@@ -1,0 +1,19 @@
+{
+    "indexes": [
+        {
+            "collectionGroup": "statsMatches",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "leagueId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "fecha",
+                    "order": "DESCENDING"
+                }
+            ]
+        }
+    ],
+    "fieldOverrides": []
+}

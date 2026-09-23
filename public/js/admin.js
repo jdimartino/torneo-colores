@@ -462,7 +462,7 @@ function getEquivalenteBs(monto, moneda) {
 function getTasasDocRef() {
     const tid = getActiveTournamentId();
     if (!tid) return null;
-    return doc(db, 'torneos', tid, 'configuracion', 'tasas');
+    return doc(db, 'torneosColores', tid, 'configuracion', 'tasas');
 }
 
 async function fetchTasasBCV() {
@@ -2610,7 +2610,7 @@ async function saveTeamQuantity(cantidad) {
     if (!t) return;
     try {
         const { updateDoc: upd, doc: d } = await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js');
-        await upd(doc(db, 'torneos', t.id), { teamConfig: { cantidad } });
+        await upd(doc(db, 'torneosColores', t.id), { teamConfig: { cantidad } });
         if (t) t.teamConfig = { cantidad };
     } catch (e) {
         console.error('Error saving team quantity:', e);
@@ -2910,11 +2910,11 @@ let drawPartidos = [];
 let editingPartidoId = null;
 
 function partidoCol(jornadaId) {
-    return collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos');
 }
 
 function partidoDocRef(jornadaId, partidoId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos', partidoId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos', partidoId);
 }
 
 async function loadDrawPartidos(jornadaId) {
@@ -3652,9 +3652,9 @@ async function recalculateAllGames() {
 
     showLoading('Recalculando juegos...');
     try {
-        await fixCollection('torneos/' + tid + '/jornadas');
-        await fixCollection('torneos/' + tid + '/semifinales');
-        await fixCollection('torneos/' + tid + '/finales');
+        await fixCollection('torneosColores/' + tid + '/jornadas');
+        await fixCollection('torneosColores/' + tid + '/semifinales');
+        await fixCollection('torneosColores/' + tid + '/finales');
         toast('Juegos recalculados: ' + totalFixed + ' corregidos, ' + totalSkipped + ' sin cambios', 'success');
         invalidatePartidosCache();
     } catch (e) {
@@ -3729,9 +3729,9 @@ async function autoFixGanadores() {
     };
 
     try {
-        await fixContainer('torneos/' + tid + '/jornadas', true);
-        await fixContainer('torneos/' + tid + '/semifinales', false);
-        await fixContainer('torneos/' + tid + '/finales', false);
+        await fixContainer('torneosColores/' + tid + '/jornadas', true);
+        await fixContainer('torneosColores/' + tid + '/semifinales', false);
+        await fixContainer('torneosColores/' + tid + '/finales', false);
         if (fixedCount > 0) {
             invalidatePartidosCache();
             console.log('[admin] autoFixGanadores: ' + fixedCount + ' ganador(es) corregido(s)');
@@ -3743,11 +3743,11 @@ async function autoFixGanadores() {
 
 // ── Firestore Helpers ──
 function resPartidoCol(jornadaId) {
-    return collection(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos');
 }
 
 function resPartidoDocRef(jornadaId, partidoId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos', partidoId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId, 'partidos', partidoId);
 }
 
 function getResPartidoDocRef(partido) {
@@ -3755,16 +3755,16 @@ function getResPartidoDocRef(partido) {
     const cid = partido._resContainerId || partido._resJornadaId;
     const type = partido._resContainerType || 'jornada';
     if (type === 'semifinal') {
-        return doc(db, 'torneos', getActiveTournamentId(), 'semifinales', cid, 'partidos', id);
+        return doc(db, 'torneosColores', getActiveTournamentId(), 'semifinales', cid, 'partidos', id);
     }
     if (type === 'final') {
-        return doc(db, 'torneos', getActiveTournamentId(), 'finales', cid, 'partidos', id);
+        return doc(db, 'torneosColores', getActiveTournamentId(), 'finales', cid, 'partidos', id);
     }
     return resPartidoDocRef(cid, id);
 }
 
 function equipoRef(equipoId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'equipos', equipoId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'equipos', equipoId);
 }
 
 // ── Shared Partidos Cache ──
@@ -5114,7 +5114,7 @@ async function deleteJornada(id) {
     if (!j) return;
 
     try {
-        const partidosSnap = await getDocs(collection(db, 'torneos', getActiveTournamentId(), 'jornadas', id, 'partidos'));
+        const partidosSnap = await getDocs(collection(db, 'torneosColores', getActiveTournamentId(), 'jornadas', id, 'partidos'));
         if (!partidosSnap.empty) {
             toast('No se puede eliminar: la jornada tiene ' + partidosSnap.size + ' partido(s). Eliminalos primero desde DRAW.', 'error');
             return;
@@ -5211,7 +5211,7 @@ async function cerrarJornada(jornadaId) {
         document.getElementById('modal-cerrar-jornada')?.remove();
         showLoading('Cerrando jornada...');
         try {
-            await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: true });
+            await updateDoc(doc(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: true });
             toast('Jornada ' + jornada.numero + ' cerrada' + (ganadorId ? '. Ganó ' + (ganadorId === jornada.equipo_a_id ? teamAName : teamBName) : ' — Empate'), 'success');
             await refreshData();
         const fp = resPartidos.find(x => x.id === partidoId);
@@ -5232,7 +5232,7 @@ async function editarJornada(jornadaId) {
     if (!jornada) return;
     showLoading('Reabriendo jornada...');
     try {
-        await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: false });
+        await updateDoc(doc(db, 'torneosColores', getActiveTournamentId(), 'jornadas', jornadaId), { cerrada: false });
         toast('Jornada ' + jornada.numero + ' reabierta', 'success');
         await refreshData();
         renderResultados();
@@ -5251,7 +5251,7 @@ async function cerrarJornadasBulk(jornadas) {
     try {
         for (const j of jornadas) {
             try {
-                await updateDoc(doc(db, 'torneos', getActiveTournamentId(), 'jornadas', j.id), { cerrada: true });
+                await updateDoc(doc(db, 'torneosColores', getActiveTournamentId(), 'jornadas', j.id), { cerrada: true });
                 ok++;
             } catch (e) {
                 err++;
@@ -5280,19 +5280,19 @@ let editingSemiPartidoId = null;
 let editingSemiFormMode = null;
 
 function semiCol() {
-    return collection(db, 'torneos', getActiveTournamentId(), 'semifinales');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'semifinales');
 }
 
 function semiDocRef(semiId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'semifinales', semiId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'semifinales', semiId);
 }
 
 function semiPartidoCol(semiId) {
-    return collection(db, 'torneos', getActiveTournamentId(), 'semifinales', semiId, 'partidos');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'semifinales', semiId, 'partidos');
 }
 
 function semiPartidoDocRef(semiId, partidoId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'semifinales', semiId, 'partidos', partidoId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'semifinales', semiId, 'partidos', partidoId);
 }
 
 async function loadSemifinales() {
@@ -6335,19 +6335,19 @@ let editingFinalPartidoId = null;
 let editingFinalFormMode = null;
 
 function finalCol() {
-    return collection(db, 'torneos', getActiveTournamentId(), 'finales');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'finales');
 }
 
 function finalDocRef(finalId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'finales', finalId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'finales', finalId);
 }
 
 function finalPartidoCol(finalId) {
-    return collection(db, 'torneos', getActiveTournamentId(), 'finales', finalId, 'partidos');
+    return collection(db, 'torneosColores', getActiveTournamentId(), 'finales', finalId, 'partidos');
 }
 
 function finalPartidoDocRef(finalId, partidoId) {
-    return doc(db, 'torneos', getActiveTournamentId(), 'finales', finalId, 'partidos', partidoId);
+    return doc(db, 'torneosColores', getActiveTournamentId(), 'finales', finalId, 'partidos', partidoId);
 }
 
 async function loadFinales() {

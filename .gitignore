@@ -3,7 +3,6 @@ node_modules
 .DS_Store
 .firebase
 firebase-debug.log
-public/js/config.js
 add_users.js
 add_users.html
 create_master_user.js

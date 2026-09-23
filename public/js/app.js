@@ -226,7 +226,7 @@ async function ensurePartidos() {
         const tid = getActiveTournamentId();
         if (!tid) return true;
         const results = await Promise.all(allJornadas.map(async j => {
-            const snap = await getDocs(collection(db, 'torneos', tid, 'jornadas', j.id, 'partidos'));
+            const snap = await getDocs(collection(db, 'torneosColores', tid, 'jornadas', j.id, 'partidos'));
             return { id: j.id, partidos: snap.docs.map(d => _annotatePartido({ id: d.id, ...normalizeFields(d.data()) }, j)) };
         }));
         if (g !== _gen) return false;
@@ -243,10 +243,10 @@ async function ensureSemis() {
         if (g !== _gen) return false;
         const tid = getActiveTournamentId();
         if (!tid) return true;
-        const snap = await getDocs(collection(db, 'torneos', tid, 'semifinales'));
+        const snap = await getDocs(collection(db, 'torneosColores', tid, 'semifinales'));
         const semis = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()), partidos: [] }));
         const partSnaps = await Promise.all(semis.map(s =>
-            getDocs(collection(db, 'torneos', tid, 'semifinales', s.id, 'partidos'))
+            getDocs(collection(db, 'torneosColores', tid, 'semifinales', s.id, 'partidos'))
         ));
         if (g !== _gen) return false;
         semis.forEach((s, i) => {
@@ -264,10 +264,10 @@ async function ensureFins() {
         if (g !== _gen) return false;
         const tid = getActiveTournamentId();
         if (!tid) return true;
-        const snap = await getDocs(collection(db, 'torneos', tid, 'finales'));
+        const snap = await getDocs(collection(db, 'torneosColores', tid, 'finales'));
         const fins = snap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()), partidos: [] }));
         const partSnaps = await Promise.all(fins.map(f =>
-            getDocs(collection(db, 'torneos', tid, 'finales', f.id, 'partidos'))
+            getDocs(collection(db, 'torneosColores', tid, 'finales', f.id, 'partidos'))
         ));
         if (g !== _gen) return false;
         fins.forEach((f, i) => {
@@ -295,7 +295,7 @@ function _attachRRLive() {
     const tid = getActiveTournamentId();
     if (!tid) return;
     allJornadas.forEach(j => {
-        const unsub = onSnapshot(collection(db, 'torneos', tid, 'jornadas', j.id, 'partidos'), (snap) => {
+        const unsub = onSnapshot(collection(db, 'torneosColores', tid, 'jornadas', j.id, 'partidos'), (snap) => {
             _jornadaPartidos[j.id] = snap.docs.map(d => _annotatePartido({ id: d.id, ...normalizeFields(d.data()) }, j));
             _rebuildRoundRobinDerived();
             schedulePublicRender();
@@ -325,7 +325,7 @@ function _attachSemisLive() {
     const tid = getActiveTournamentId();
     if (!tid) return;
     const subscribedIds = new Set();
-    const unsub = onSnapshot(collection(db, 'torneos', tid, 'semifinales'), (snap) => {
+    const unsub = onSnapshot(collection(db, 'torneosColores', tid, 'semifinales'), (snap) => {
         snap.docs.forEach(docSnap => {
             const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
             const existing = allSemifinales.find(s => s.id === docSnap.id);
@@ -337,7 +337,7 @@ function _attachSemisLive() {
             if (!subscribedIds.has(docSnap.id)) {
                 subscribedIds.add(docSnap.id);
                 const pUnsub = onSnapshot(
-                    collection(db, 'torneos', tid, 'semifinales', docSnap.id, 'partidos'),
+                    collection(db, 'torneosColores', tid, 'semifinales', docSnap.id, 'partidos'),
                     (pSnap) => {
                         const s = allSemifinales.find(x => x.id === docSnap.id);
                         if (s) s.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
@@ -358,7 +358,7 @@ function _attachFinsLive() {
     const tid = getActiveTournamentId();
     if (!tid) return;
     const subscribedIds = new Set();
-    const unsub = onSnapshot(collection(db, 'torneos', tid, 'finales'), (snap) => {
+    const unsub = onSnapshot(collection(db, 'torneosColores', tid, 'finales'), (snap) => {
         snap.docs.forEach(docSnap => {
             const data = { id: docSnap.id, ...normalizeFields(docSnap.data()) };
             const existing = allFinales.find(f => f.id === docSnap.id);
@@ -370,7 +370,7 @@ function _attachFinsLive() {
             if (!subscribedIds.has(docSnap.id)) {
                 subscribedIds.add(docSnap.id);
                 const pUnsub = onSnapshot(
-                    collection(db, 'torneos', tid, 'finales', docSnap.id, 'partidos'),
+                    collection(db, 'torneosColores', tid, 'finales', docSnap.id, 'partidos'),
                     (pSnap) => {
                         const f = allFinales.find(x => x.id === docSnap.id);
                         if (f) f.partidos = pSnap.docs.map(d => ({ id: d.id, ...normalizeFields(d.data()) }));
@@ -1052,7 +1052,7 @@ async function loadTournamentList() {
         return;
     }
     try {
-        const snaps = await Promise.all(ids.map(id => getDoc(doc(db, 'torneos', id))));
+        const snaps = await Promise.all(ids.map(id => getDoc(doc(db, 'torneosColores', id))));
         _tournamentList = snaps.filter(s => s.exists()).map(s => ({ id: s.id, name: s.data().name || s.data().nombre }));
     } catch (e) {
         _tournamentList = [];

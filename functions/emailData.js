@@ -7,19 +7,19 @@
 // ═══════════════════════════════════════════════════════════════
 
 async function fetchTorneoEmailData(db, torneoId, fechaStr) {
-  const torneoSnap = await db.collection('torneos').doc(torneoId).get();
+  const torneoSnap = await db.collection('torneosColores').doc(torneoId).get();
   const td = torneoSnap.exists ? torneoSnap.data() : {};
   const torneoNombre = td.name || td.nombre || torneoId;
 
-  const jugadoresSnap = await db.collection(`torneos/${torneoId}/jugadores`).get();
+  const jugadoresSnap = await db.collection(`torneosColores/${torneoId}/jugadores`).get();
   const jugadores = jugadoresSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  const jornadasSnap = await db.collection(`torneos/${torneoId}/jornadas`).get();
+  const jornadasSnap = await db.collection(`torneosColores/${torneoId}/jornadas`).get();
   const partidos = [];
   let jornadaNombre = null;
 
   for (const jDoc of jornadasSnap.docs) {
-    const partidosSnap = await db.collection(`torneos/${torneoId}/jornadas/${jDoc.id}/partidos`).get();
+    const partidosSnap = await db.collection(`torneosColores/${torneoId}/jornadas/${jDoc.id}/partidos`).get();
     for (const pDoc of partidosSnap.docs) {
       const p = pDoc.data();
       if (p.estado === 'finalizado' || p.fecha === fechaStr) {
@@ -34,10 +34,10 @@ async function fetchTorneoEmailData(db, torneoId, fechaStr) {
     }
   }
 
-  const posSnap = await db.doc(`torneos/${torneoId}/posiciones/general`).get();
+  const posSnap = await db.doc(`torneosColores/${torneoId}/posiciones/general`).get();
   const posicionesRaw = posSnap.exists ? (posSnap.data().posiciones || posSnap.data().tabla || []) : [];
 
-  const catsSnap = await db.collection(`torneos/${torneoId}/categorias`).get();
+  const catsSnap = await db.collection(`torneosColores/${torneoId}/categorias`).get();
   const categorias = catsSnap.docs.map(d => d.data().nombre || d.data().name || d.id).filter(Boolean);
 
   return {

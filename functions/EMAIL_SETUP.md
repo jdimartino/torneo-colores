@@ -61,8 +61,8 @@ actualizar `dailyLimit` desde Firestore (o el panel).
 | Path | Uso |
 |---|---|
 | `config/emailConfig` | Config global: interruptor maestro, dailyLimit, sender, timezone, tipos |
-| `torneos/{tid}/configuracion/email` | Overrides por torneo (tipos activos, hora, timezone) |
-| `torneos/{tid}/enviosEmail/{id}` | Historial + anti-duplicados (ID determinístico) |
+| `torneosColores/{tid}/configuracion/email` | Overrides por torneo (tipos activos, hora, timezone) |
+| `torneosColores/{tid}/enviosEmail/{id}` | Historial + anti-duplicados (ID determinístico) |
 | `emailStats/{YYYY-MM-DD}` | Contadores diarios reales (fuente backend) |
 | `emailStats/historico` | Totales históricos |
 

@@ -56,7 +56,7 @@ public/
 ### Firebase
 - Proyecto: `torneos-tenis-jdm`
 - Hosting: 1 site (`torneos-tenis-jdm`)
-- Firestore: estructura `torneos/{id}/jugadores`, `torneos/{id}/equipos`, etc.
+- Firestore: estructura `torneosColores/{id}/jugadores`, `torneosColores/{id}/equipos`, etc.
 
 ### CSS
 - Variables de tema en `:root` (colores, spacing, etc.)

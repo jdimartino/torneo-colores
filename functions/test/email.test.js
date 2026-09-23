@@ -331,7 +331,7 @@ async function test(name, fn) {
     const envioId = [...db.docs.keys()].find(p => p.includes('/enviosEmail/')).split('/').pop();
     const res = await service.retryEnvio({ torneoId: TID, envioId, actorUid: 'uid1' });
     assert.strictEqual(res.status, 'sent');
-    const doc = db.docs.get(`torneos/${TID}/enviosEmail/${envioId}`);
+    const doc = db.docs.get(`torneosColores/${TID}/enviosEmail/${envioId}`);
     assert.strictEqual(doc.estado, 'sent');
     assert.strictEqual(doc.intentos, 2);
     const stats = db.docs.get('emailStats/2026-09-03');
@@ -428,7 +428,7 @@ async function test(name, fn) {
       recipients: [{ jugadorId: 'j1', email: 'a@b.com', nombre: 'A' }], subject: 'x'
     });
     const envioId = [...db.docs.keys()].find(p => p.includes('/enviosEmail/')).split('/').pop();
-    db.docs.get(`torneos/${TID}/enviosEmail/${envioId}`).estado = 'error';
+    db.docs.get(`torneosColores/${TID}/enviosEmail/${envioId}`).estado = 'error';
     db.docs.set('config/emailConfig', { ...db.docs.get('config/emailConfig'), enabled: false });
     const res = await service.retryEnvio({ torneoId: TID, envioId, actorUid: 'uid1' });
     assert.strictEqual(res.status, 'paused');
@@ -446,7 +446,7 @@ async function test(name, fn) {
 
   await test('config por torneo puede desactivar tipos aunque global esté ON', async () => {
     const { service, db, brevoState } = setup({ tipos: { bienvenida: true } });
-    db.docs.set(`torneos/${TID}/configuracion/email`, { tipos: { bienvenida: false } });
+    db.docs.set(`torneosColores/${TID}/configuracion/email`, { tipos: { bienvenida: false } });
     const res = await service.sendBatch({
       torneoId: TID, tipo: 'bienvenida', recipients: recipients2, subject: 'x'
     });

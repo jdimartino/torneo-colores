@@ -23,31 +23,31 @@ export function setActiveTournament(id, data) {
 }
 
 export function col(name) {
-    return collection(db, 'torneos', _activeTournamentId, name);
+    return collection(db, 'torneosColores', _activeTournamentId, name);
 }
 
 export function finanzasCol() {
-    return collection(db, 'torneos', _activeTournamentId, 'finanzas');
+    return collection(db, 'torneosColores', _activeTournamentId, 'finanzas');
 }
 
 export function docRef(name, id) {
-    return doc(db, 'torneos', _activeTournamentId, name, id);
+    return doc(db, 'torneosColores', _activeTournamentId, name, id);
 }
 
 export function docRefAuto(name) {
-    return doc(collection(db, 'torneos', _activeTournamentId, name));
+    return doc(collection(db, 'torneosColores', _activeTournamentId, name));
 }
 
 export function torneosCol() {
-    return collection(db, 'torneos');
+    return collection(db, 'torneosColores');
 }
 
 export function torneoRef(id) {
-    return doc(db, 'torneos', id);
+    return doc(db, 'torneosColores', id);
 }
 
 export function configDoc() {
-    return doc(db, 'config', 'activeTournament');
+    return doc(db, 'config', 'torneosColores_activeTournament');
 }
 
 export async function loadTournamentConfig() {
@@ -55,7 +55,7 @@ export async function loadTournamentConfig() {
         const snap = await getDoc(configDoc());
         if (snap.exists()) {
             const data = snap.data();
-            console.log('[config] config/activeTournament exists:', data);
+            console.log('[config] config/torneosColores_activeTournament exists:', data);
             if (data.activeTournamentIds && data.activeTournamentIds.length > 0) {
                 _activeTournamentIds = data.activeTournamentIds;
                 _activeTournamentId = data.selectedTournamentId || _activeTournamentIds[0];
@@ -73,7 +73,7 @@ export async function loadTournamentConfig() {
                 }
             }
         } else {
-            console.warn('[config] config/activeTournament document DOES NOT EXIST');
+            console.warn('[config] config/torneosColores_activeTournament document DOES NOT EXIST');
         }
     } catch (e) {
         console.error('[config] Error loading tournament config:', e);

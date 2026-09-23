@@ -487,7 +487,7 @@ exports.emailSendTest = onCall({ secrets: [BREVO_API_KEY] }, async (request) => 
     const cfg = await emailService.getEffectiveConfig(torneoId);
     const fechaStr = emailService.fechaDeHoy(cfg);
     if (tipo === 'bienvenida') {
-      const torneoSnap = await db.collection('torneos').doc(torneoId).get();
+      const torneoSnap = await db.collection('torneosColores').doc(torneoId).get();
       datos = { torneoNombre: torneoSnap.exists ? (torneoSnap.data().name || torneoSnap.data().nombre || torneoId) : torneoId };
     } else {
       datos = await fetchTorneoEmailData(db, torneoId, fechaStr);
@@ -518,7 +518,7 @@ exports.emailSendBienvenida = onCall({ secrets: [BREVO_API_KEY] }, async (reques
   const { torneoId, toEmail, toNombre, jugadorId } = request.data || {};
   if (!torneoId) throw new HttpsErrorV2('invalid-argument', 'torneoId es obligatorio.');
   if (!toEmail) throw new HttpsErrorV2('invalid-argument', 'toEmail es obligatorio.');
-  const torneoSnap = await db.collection('torneos').doc(torneoId).get();
+  const torneoSnap = await db.collection('torneosColores').doc(torneoId).get();
   const torneoNombre = torneoSnap.exists ? (torneoSnap.data().name || torneoSnap.data().nombre || torneoId) : torneoId;
   return emailService.sendBienvenida({ torneoId, toEmail, toNombre, jugadorId, torneoNombre });
 });
@@ -544,7 +544,7 @@ exports.emailGetDailyStatus = onCall(async (request) => {
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 exports.emailSendDailyStats = onSchedule({ schedule: 'every 1 hours', secrets: [BREVO_API_KEY] }, async () => {
-  const torneosSnap = await db.collection('torneos').get();
+  const torneosSnap = await db.collection('torneosColores').get();
   const results = [];
 
   for (const torneoDoc of torneosSnap.docs) {
@@ -554,7 +554,7 @@ exports.emailSendDailyStats = onSchedule({ schedule: 'every 1 hours', secrets: [
 
     try {
       const gSnap = await db.doc('config/emailConfig').get();
-      const tSnap = await db.doc(`torneos/${tid}/configuracion/email`).get();
+      const tSnap = await db.doc(`torneosColores/${tid}/configuracion/email`).get();
       const gCfg = gSnap.exists ? gSnap.data() : null;
       const tCfg = tSnap.exists ? tSnap.data() : null;
       const core = require('./emailCore');

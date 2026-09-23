@@ -34,13 +34,13 @@ const LISTA = [
 ];
 
 async function main() {
-  const cfgSnap = await db.doc('config/activeTournament').get();
+  const cfgSnap = await db.doc('config/torneosColores_activeTournament').get();
   const cfg = cfgSnap.data();
   const tid = cfg.selectedTournamentId || (cfg.activeTournamentIds || [])[0] || cfg.tournamentId;
   if (!tid) { console.log('❌ No hay torneo activo'); return; }
   console.log('🗂️  Torneo:', tid);
 
-  const equiposSnap = await db.collection(`torneos/${tid}/equipos`).get();
+  const equiposSnap = await db.collection(`torneosColores/${tid}/equipos`).get();
   const negro = equiposSnap.docs.find(d => {
     const n = String(d.data().nombre || '').toLowerCase();
     return n.includes('negro');
@@ -50,7 +50,7 @@ async function main() {
   console.log('👥 A asignar:', LISTA.length);
 
   const ids = LISTA.map(x => x.id);
-  const jugSnap = await db.collection(`torneos/${tid}/jugadores`).where(admin.firestore.FieldPath.documentId(), 'in', ids).get();
+  const jugSnap = await db.collection(`torneosColores/${tid}/jugadores`).where(admin.firestore.FieldPath.documentId(), 'in', ids).get();
   const existentes = new Map(jugSnap.docs.map(d => [d.id, { id: d.id, ...d.data() }]));
 
   console.log(APPLICATION ? '\n━━━ APLICANDO ━━━' : '\n━━━ DRY-RUN ━━━');
@@ -62,7 +62,7 @@ async function main() {
     if (j.equipo_id === negro.id) { console.log(`  ✓ ${label}: ya está en Negro`); skip++; continue; }
     if (j.equipo_id) { console.log(`  ⚠️  ${label} (${j.nombre} ${j.apellidos||''}): ya asignado a otro equipo (${j.equipo_id})`); err++; continue; }
     if (APPLICATION) {
-      await db.collection(`torneos/${tid}/jugadores`).doc(id).update({ equipo_id: negro.id });
+      await db.collection(`torneosColores/${tid}/jugadores`).doc(id).update({ equipo_id: negro.id });
       console.log(`  ✔ ${label} (${j.nombre} ${j.apellidos||''}) → Negro`);
     } else {
       console.log(`  ↦ ${label} (${j.nombre} ${j.apellidos||''}) → Negro`);
